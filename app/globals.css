@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+  }
+}
+
+@layer components {
+  .tier-elite   { @apply bg-yellow-400 text-yellow-900 font-bold; }
+  .tier-strong  { @apply bg-green-500 text-green-950 font-semibold; }
+  .tier-value   { @apply bg-blue-500 text-blue-950 font-semibold; }
+  .tier-low     { @apply bg-slate-600 text-slate-300; }
+
+  .card {
+    @apply bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg;
+  }
+
+  .stat-pill {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-mono;
+  }
+}
