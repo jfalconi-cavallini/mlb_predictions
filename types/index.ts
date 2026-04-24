@@ -42,6 +42,7 @@ export interface MLBGame {
     state: string;
   };
   gameTime: string;     // Local game time HH:MM
+  gameDateTime: string; // ISO 8601 UTC datetime (from MLB Stats API)
   probableHomePitcher: MLBPitcher | null;
   probableAwayPitcher: MLBPitcher | null;
 }

@@ -11,8 +11,10 @@ import { fetchTodaysGames } from '../../../lib/mlbApi';
 import { validateAndBuildHitterPool } from '../../../lib/validation';
 import { buildPrediction } from '../../../scoring/engine';
 import { getParkFactors } from '../../../lib/parkFactors';
+import { fetchWeather } from '../../../lib/weather';
 import {
   PredictionAPIResponse, HitterPrediction, MLBGame, MLBPitcher, DataSourceHealth,
+  WeatherConditions,
 } from '../../../types';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,7 +49,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       rejectedHitters: 0,
       predictions: [],
       rejectionLog: [],
-      sourceHealth: buildHealth('error', 'ok', 'ok', 'ok', 'unavailable', 'ok', now),
+      sourceHealth: buildHealth('error', 'ok', 'ok', 'ok', 'error', 'ok', now),
       generatedAt: now,
       warnings: [...warnings, 'No games scheduled for this date'],
     } satisfies PredictionAPIResponse);
@@ -75,7 +77,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .slice(0, 5) // don't flood warnings
     .map(r => `Rejected ${r.rawName}: ${r.reason}`));
 
-  // ── STEP 4: Build predictions ─────────────────────────────────────────────
+  // ── STEP 4a: Fetch weather for every unique game in parallel ─────────────
+  const uniqueGames = [...new Map([...teamGameObjMap.values()].map(g => [g.gamePk, g])).values()];
+  const weatherResults = await Promise.all(
+    uniqueGames.map(g => fetchWeather(g.gamePk, g.venue.id, g.gameDateTime)),
+  );
+  const weatherMap = new Map<number, WeatherConditions | null>();
+  uniqueGames.forEach((g, i) => weatherMap.set(g.gamePk, weatherResults[i]));
+
+  // ── STEP 4b: Build predictions ────────────────────────────────────────────
   const predictions: HitterPrediction[] = [];
 
   for (const hitter of validationResult.accepted) {
@@ -95,9 +105,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     hitter.team.franchiseName = teamRef.franchiseName;
 
     const parkFactors = getParkFactors(game.venue.id, game.venue.name);
+    const weather = weatherMap.get(game.gamePk) ?? null;
 
-    // Weather is not fetched in this version — engine handles null gracefully
-    const prediction = buildPrediction(hitter, game, opposingPitcher, parkFactors, null);
+    const prediction = buildPrediction(hitter, game, opposingPitcher, parkFactors, weather);
     predictions.push(prediction);
   }
 
@@ -109,7 +119,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     validationResult.accepted.length > 0 ? 'ok' : 'error',
     'ok',
     validationResult.accepted.some(h => h.seasonStats) ? 'ok' : 'stale',
-    'unavailable',
+    weatherResults.some(w => w?.dataSource === 'forecast') ? 'ok' : 'unavailable',
     'ok',
     now,
   );

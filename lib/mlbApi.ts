@@ -353,6 +353,7 @@ export async function fetchTodaysGames(
         state: g.venue.state ?? '',
       },
       gameTime: gameTimeRaw,
+      gameDateTime: g.gameDate ?? '',
       probableHomePitcher: buildPitcher(g.teams.home.probablePitcher),
       probableAwayPitcher: buildPitcher(g.teams.away.probablePitcher),
     });
