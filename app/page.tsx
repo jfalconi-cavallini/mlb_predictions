@@ -188,6 +188,21 @@ function HealthDot({ status }: { status: string }) {
 
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 
+function getTodayET(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+function offsetDate(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toLocaleDateString('en-CA');
+}
+
+function formatDisplayDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 export default function Home() {
   const [data, setData] = useState<PredictionAPIResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -195,12 +210,16 @@ export default function Home() {
   const [activeProp, setActiveProp] = useState<PropType>('hr');
   const [showRejected, setShowRejected] = useState(false);
   const [minProb, setMinProb] = useState(0);
+  const [selectedDate, setSelectedDate] = useState<string>(getTodayET());
 
-  const loadPredictions = useCallback(async () => {
+  const today = getTodayET();
+  const isToday = selectedDate === today;
+
+  const loadPredictions = useCallback(async (date: string) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/predict');
+      const res = await fetch(`/api/predict?date=${date}`);
       if (!res.ok) throw new Error(`API error ${res.status}`);
       const json: PredictionAPIResponse = await res.json();
       setData(json);
@@ -211,7 +230,13 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => { loadPredictions(); }, [loadPredictions]);
+  useEffect(() => { loadPredictions(selectedDate); }, [loadPredictions, selectedDate]);
+
+  function goToDate(date: string) {
+    if (date > today) return;
+    setSelectedDate(date);
+    setData(null);
+  }
 
   // Re-sort predictions based on active prop
   const sortedPredictions = data
@@ -224,6 +249,42 @@ export default function Home() {
 
   return (
     <div>
+      {/* Date navigation */}
+      <div className="flex items-center gap-2 mb-5">
+        <button
+          onClick={() => goToDate(offsetDate(selectedDate, -1))}
+          disabled={loading}
+          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
+          aria-label="Previous day"
+        >
+          ‹
+        </button>
+        <input
+          type="date"
+          value={selectedDate}
+          max={today}
+          onChange={e => { if (e.target.value) goToDate(e.target.value); }}
+          className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-slate-600"
+        />
+        <button
+          onClick={() => goToDate(offsetDate(selectedDate, 1))}
+          disabled={loading || isToday}
+          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
+          aria-label="Next day"
+        >
+          ›
+        </button>
+        <span className="text-slate-400 text-sm">{formatDisplayDate(selectedDate)}</span>
+        {!isToday && (
+          <button
+            onClick={() => goToDate(today)}
+            className="ml-auto text-xs text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            Back to today
+          </button>
+        )}
+      </div>
+
       {/* Controls bar */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         {/* Prop selector */}
@@ -269,7 +330,7 @@ export default function Home() {
         </div>
 
         <button
-          onClick={loadPredictions}
+          onClick={() => loadPredictions(selectedDate)}
           disabled={loading}
           className="ml-auto px-4 py-1.5 bg-mlb-navy hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
         >
@@ -313,7 +374,7 @@ export default function Home() {
           <div className="text-red-400 font-medium mb-1">Failed to load predictions</div>
           <div className="text-slate-500 text-sm">{error}</div>
           <button
-            onClick={loadPredictions}
+            onClick={() => loadPredictions(selectedDate)}
             className="mt-3 px-4 py-2 bg-mlb-navy text-white text-sm rounded-lg"
           >
             Retry
