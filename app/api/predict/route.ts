@@ -12,6 +12,7 @@ import { validateAndBuildHitterPool } from '../../../lib/validation';
 import { buildPrediction } from '../../../scoring/engine';
 import { getParkFactors } from '../../../lib/parkFactors';
 import { fetchWeather } from '../../../lib/weather';
+import { getCachedPredictions, savePredictions } from '../../../lib/cache';
 import {
   PredictionAPIResponse, HitterPrediction, MLBGame, MLBPitcher, DataSourceHealth,
   WeatherConditions,
@@ -37,6 +38,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const season = date.slice(0, 4);
   const warnings: string[] = [];
   const now = new Date().toISOString();
+
+  // ── CACHE: Return locked predictions for past dates ─────────────────────────
+  const today = getTodayET();
+  if (date < today) {
+    const cached = getCachedPredictions(date);
+    if (cached) return NextResponse.json(cached);
+  }
 
   // ── STEP 1: Fetch today's schedule ─────────────────────────────────────────
   const { games, warnings: schedWarn } = await fetchTodaysGames(date, season);
@@ -134,6 +142,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     generatedAt: now,
     warnings,
   };
+
+  // Save to cache so past-day views always return the same picks
+  savePredictions(date, body as unknown as Record<string, unknown>);
 
   return NextResponse.json(body);
 }

@@ -265,6 +265,41 @@ export interface DataSourceHealth {
   lastUpdated: Record<string, string>;
 }
 
+// ─── GAME PREDICTIONS ────────────────────────────────────────────────────────
+
+export interface GamePrediction {
+  gamePk: number;
+  homeTeam: MLBTeam;
+  awayTeam: MLBTeam;
+  homeStartingPitcher: MLBPitcher | null;
+  awayStartingPitcher: MLBPitcher | null;
+  homeWinProbability: number;
+  awayWinProbability: number;
+  homeExpectedRuns: number;
+  awayExpectedRuns: number;
+  spreadLean: string;
+  spreadLeanSide: 'home' | 'away' | null;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  venue: MLBGame['venue'];
+  parkFactors: ParkFactors;
+  gameTime: string;
+  gameDate: string;
+  keyFactors: string[];
+}
+
+export interface GamePredictionAPIResponse {
+  date: string;
+  games: GamePrediction[];
+  generatedAt: string;
+  warnings: string[];
+}
+
+export interface GameResultsAPIResponse {
+  date: string;
+  hrHitterIds: number[];
+  gamesChecked: number;
+}
+
 // ─── VALIDATION RESULT ───────────────────────────────────────────────────────
 
 export interface ValidationResult {

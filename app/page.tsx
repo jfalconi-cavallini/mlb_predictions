@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier } from '../types';
+import { PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier, GamePredictionAPIResponse, GamePrediction, GameResultsAPIResponse } from '../types';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -30,42 +30,46 @@ function probBarColor(prob: number): string {
   return 'bg-slate-600';
 }
 
-// ─── PROP TABS ────────────────────────────────────────────────────────────────
-
-const PROP_LABELS: Record<PropType, string> = {
-  hr: 'Home Run',
-  hit: 'Hit',
-  run: 'Run',
-  rbi: 'RBI',
-};
-
 // ─── PREDICTION CARD ──────────────────────────────────────────────────────────
 
 function PredictionCard({
   pred,
   rank,
   activeProp,
+  hrResult,
 }: {
   pred: HitterPrediction;
   rank: number;
   activeProp: PropType;
+  hrResult: 'hit' | 'miss' | 'unknown';
 }) {
   const { hitter, game, opposingPitcher, parkFactors, probabilities, explanations, lineupStatus } = pred;
   const explanation = explanations.find(e => e.prop === activeProp);
   const prob = probabilities[activeProp];
-  const isHome = game.homeTeam.id === hitter.team.id;
-  const matchup = isHome
-    ? `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`
-    : `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
+  const matchup = `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
+
+  const resultBorder =
+    hrResult === 'hit' ? 'border-green-600 ring-1 ring-green-600/40' :
+    hrResult === 'miss' ? 'border-red-800 ring-1 ring-red-800/30' :
+    '';
+
+  const resultBadge =
+    hrResult === 'hit' ? (
+      <span className="text-xs font-bold text-green-400 bg-green-950/60 px-2 py-0.5 rounded-full border border-green-700">HR</span>
+    ) : hrResult === 'miss' ? (
+      <span className="text-xs font-bold text-red-400 bg-red-950/60 px-2 py-0.5 rounded-full border border-red-800">No HR</span>
+    ) : null;
 
   return (
-    <div className="card hover:border-slate-700 transition-colors">
-      {/* Header row */}
+    <div className={`card hover:border-slate-700 transition-colors ${resultBorder}`}>
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
           <span className="text-slate-500 font-mono text-sm w-6 shrink-0">#{rank}</span>
           <div>
-            <div className="font-bold text-white text-sm">{hitter.fullName}</div>
+            <div className="font-bold text-white text-sm flex items-center gap-2">
+              {hitter.fullName}
+              {resultBadge}
+            </div>
             <div className="text-slate-400 text-xs flex items-center gap-1.5 mt-0.5">
               <span>{hitter.team.abbreviation || hitter.team.name}</span>
               <span className="text-slate-600">·</span>
@@ -84,7 +88,6 @@ function PredictionCard({
           </div>
         </div>
 
-        {/* Main probability badge */}
         <div className="text-right shrink-0">
           <div className="font-mono text-xl font-bold text-white">{pct(prob)}</div>
           {explanation && (
@@ -95,7 +98,6 @@ function PredictionCard({
         </div>
       </div>
 
-      {/* Probability bar */}
       <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${probBarColor(prob)}`}
@@ -124,7 +126,6 @@ function PredictionCard({
         })}
       </div>
 
-      {/* Matchup context */}
       <div className="flex flex-wrap gap-2 text-xs text-slate-400 mb-3">
         <span className="stat-pill bg-slate-800 text-slate-300">{matchup} · {game.gameTime} ET</span>
         {opposingPitcher && (
@@ -137,7 +138,6 @@ function PredictionCard({
         </span>
       </div>
 
-      {/* Season stats */}
       {hitter.seasonStats && (
         <div className="flex flex-wrap gap-2 text-xs mb-3">
           {[
@@ -162,7 +162,6 @@ function PredictionCard({
         </div>
       )}
 
-      {/* Key drivers */}
       {explanation && explanation.keyDrivers.length > 0 && (
         <ul className="space-y-1">
           {explanation.keyDrivers.map((d, i) => (
@@ -172,6 +171,266 @@ function PredictionCard({
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── GAME PICK CARD ───────────────────────────────────────────────────────────
+
+function GamePickCard({ game }: { game: GamePrediction }) {
+  const leanHome = game.spreadLeanSide === 'home';
+  const leanAway = game.spreadLeanSide === 'away';
+  const confColor =
+    game.confidence === 'HIGH' ? 'text-yellow-400' :
+    game.confidence === 'MEDIUM' ? 'text-blue-400' :
+    'text-slate-400';
+
+  return (
+    <div className="card hover:border-slate-700 transition-colors">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="flex-1">
+          <div className={`font-bold text-sm ${leanAway ? 'text-white' : 'text-slate-400'}`}>
+            {game.awayTeam.abbreviation || game.awayTeam.name}
+            {leanAway && <span className="ml-1.5 text-xs text-green-400">◀ lean</span>}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            {game.awayStartingPitcher
+              ? `${game.awayStartingPitcher.fullName} (${game.awayStartingPitcher.throwHand}HP)`
+              : 'TBD'}
+          </div>
+          {game.awayStartingPitcher?.seasonStats && (
+            <div className="text-xs text-slate-500">
+              {game.awayStartingPitcher.seasonStats.era.toFixed(2)} ERA
+            </div>
+          )}
+        </div>
+
+        <div className="text-center px-3">
+          <div className="text-slate-600 text-xs font-mono">@</div>
+          <div className="text-slate-500 text-xs mt-1">{game.gameTime} ET</div>
+        </div>
+
+        <div className="flex-1 text-right">
+          <div className={`font-bold text-sm ${leanHome ? 'text-white' : 'text-slate-400'}`}>
+            {leanHome && <span className="mr-1.5 text-xs text-green-400">lean ▶</span>}
+            {game.homeTeam.abbreviation || game.homeTeam.name}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            {game.homeStartingPitcher
+              ? `${game.homeStartingPitcher.fullName} (${game.homeStartingPitcher.throwHand}HP)`
+              : 'TBD'}
+          </div>
+          {game.homeStartingPitcher?.seasonStats && (
+            <div className="text-xs text-slate-500">
+              {game.homeStartingPitcher.seasonStats.era.toFixed(2)} ERA
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex h-2 rounded-full overflow-hidden mb-2 bg-slate-800">
+        <div className="bg-blue-600 transition-all" style={{ width: `${game.awayWinProbability * 100}%` }} />
+        <div className="bg-red-600 transition-all" style={{ width: `${game.homeWinProbability * 100}%` }} />
+      </div>
+      <div className="flex justify-between text-xs text-slate-500 mb-3">
+        <span>{pct(game.awayWinProbability)}</span>
+        <span>{pct(game.homeWinProbability)}</span>
+      </div>
+
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <span className="font-medium text-sm text-white">{game.spreadLean}</span>
+        <span className={`text-xs font-bold ${confColor}`}>{game.confidence}</span>
+      </div>
+
+      <div className="flex gap-3 text-xs text-slate-500 mb-3">
+        <span>xR: <span className="text-slate-300">{game.awayExpectedRuns.toFixed(1)}</span></span>
+        <span>vs</span>
+        <span>xR: <span className="text-slate-300">{game.homeExpectedRuns.toFixed(1)}</span></span>
+        <span className="ml-auto">{game.venue.name}</span>
+      </div>
+
+      {game.keyFactors.length > 0 && (
+        <ul className="space-y-1">
+          {game.keyFactors.map((f, i) => (
+            <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
+              <span className="text-slate-600 mt-0.5">›</span>
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── HRR CARD ─────────────────────────────────────────────────────────────────
+
+function HRRCard({ pred, rank, score }: { pred: HitterPrediction; rank: number; score: number }) {
+  const { hitter, game, opposingPitcher, probabilities, explanations } = pred;
+  const matchup = `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
+
+  return (
+    <div className="card hover:border-slate-700 transition-colors">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="flex items-center gap-3">
+          <span className="text-slate-500 font-mono text-sm w-6 shrink-0">#{rank}</span>
+          <div>
+            <div className="font-bold text-white text-sm">{hitter.fullName}</div>
+            <div className="text-slate-400 text-xs flex items-center gap-1.5 mt-0.5">
+              <span>{hitter.team.abbreviation || hitter.team.name}</span>
+              <span className="text-slate-600">·</span>
+              <span>{hitter.primaryPosition}</span>
+              <span className="text-slate-600">·</span>
+              <span>{hitter.batHand}HB</span>
+            </div>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="font-mono text-xl font-bold text-white">{score.toFixed(3)}</div>
+          <div className="text-slate-500 text-xs">HRR Score</div>
+        </div>
+      </div>
+
+      <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-purple-500 transition-all"
+          style={{ width: `${Math.min(score / 1.5, 1) * 100}%` }}
+        />
+      </div>
+
+      <div className="grid grid-cols-4 gap-1.5 mb-3">
+        {(['hr', 'hit', 'run', 'rbi'] as PropType[]).map(p => {
+          const ex = explanations.find(e => e.prop === p);
+          return (
+            <div key={p} className="text-center p-1.5 rounded-lg bg-slate-900">
+              <div className="text-slate-400 text-xs uppercase tracking-wider">{p}</div>
+              <div className="font-mono font-bold text-sm text-white">{pct(probabilities[p])}</div>
+              {ex && <span className={`stat-pill text-[10px] ${tierClass(ex.confidence)}`}>{ex.confidence}</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-xs text-slate-400 mb-3">
+        <span className="stat-pill bg-slate-800 text-slate-300">{matchup} · {game.gameTime} ET</span>
+        {opposingPitcher && (
+          <span className="stat-pill bg-slate-800 text-slate-300">
+            vs {opposingPitcher.fullName} ({opposingPitcher.throwHand}HP)
+          </span>
+        )}
+      </div>
+
+      {hitter.seasonStats && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          {[
+            { label: 'AVG', val: fmt(hitter.seasonStats.avg) },
+            { label: 'OBP', val: fmt(hitter.seasonStats.obp) },
+            { label: 'OPS', val: fmt(hitter.seasonStats.ops) },
+            { label: 'K%', val: pct(hitter.seasonStats.kPct) },
+            { label: 'PA', val: String(hitter.seasonStats.paCount) },
+          ].map(({ label, val }) => (
+            <span key={label} className="stat-pill bg-slate-800 text-slate-300">
+              <span className="text-slate-500">{label}</span> {val}
+            </span>
+          ))}
+          {hitter.recentStats && (
+            <span className="stat-pill bg-slate-800 text-amber-300">
+              <span className="text-slate-500">L{hitter.recentStats.windowDays}</span>{' '}
+              {fmt(hitter.recentStats.avg)}/{fmt(hitter.recentStats.slg)}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── TOTAL BASES CARD ─────────────────────────────────────────────────────────
+
+function TotalBasesCard({ pred, rank, projectedTB }: { pred: HitterPrediction; rank: number; projectedTB: number }) {
+  const { hitter, game, opposingPitcher, probabilities, parkFactors } = pred;
+  const matchup = `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
+  const avg = hitter.seasonStats?.avg ?? 0;
+  const slg = hitter.seasonStats?.slg ?? 0;
+  const basesPerHit = avg > 0 ? slg / avg : 0;
+
+  return (
+    <div className="card hover:border-slate-700 transition-colors">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="flex items-center gap-3">
+          <span className="text-slate-500 font-mono text-sm w-6 shrink-0">#{rank}</span>
+          <div>
+            <div className="font-bold text-white text-sm">{hitter.fullName}</div>
+            <div className="text-slate-400 text-xs flex items-center gap-1.5 mt-0.5">
+              <span>{hitter.team.abbreviation || hitter.team.name}</span>
+              <span className="text-slate-600">·</span>
+              <span>{hitter.primaryPosition}</span>
+              <span className="text-slate-600">·</span>
+              <span>{hitter.batHand}HB</span>
+            </div>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="font-mono text-xl font-bold text-white">{projectedTB.toFixed(3)}</div>
+          <div className="text-slate-500 text-xs">Proj. xTB</div>
+        </div>
+      </div>
+
+      <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-amber-500 transition-all"
+          style={{ width: `${Math.min(projectedTB / 0.75, 1) * 100}%` }}
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 mb-3">
+        <div className="text-center p-1.5 rounded-lg bg-slate-900">
+          <div className="text-slate-400 text-xs uppercase tracking-wider">Hit%</div>
+          <div className="font-mono font-bold text-sm text-white">{pct(probabilities.hit)}</div>
+        </div>
+        <div className="text-center p-1.5 rounded-lg bg-slate-900">
+          <div className="text-slate-400 text-xs uppercase tracking-wider">xB/H</div>
+          <div className="font-mono font-bold text-sm text-white">{basesPerHit > 0 ? basesPerHit.toFixed(2) : '—'}</div>
+        </div>
+        <div className="text-center p-1.5 rounded-lg bg-slate-900">
+          <div className="text-slate-400 text-xs uppercase tracking-wider">HR%</div>
+          <div className="font-mono font-bold text-sm text-white">{pct(probabilities.hr)}</div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-xs text-slate-400 mb-3">
+        <span className="stat-pill bg-slate-800 text-slate-300">{matchup} · {game.gameTime} ET</span>
+        {opposingPitcher && (
+          <span className="stat-pill bg-slate-800 text-slate-300">
+            vs {opposingPitcher.fullName} ({opposingPitcher.throwHand}HP)
+          </span>
+        )}
+        <span className="stat-pill bg-slate-800 text-slate-300">
+          {parkFactors.venueName} · HR×{parkFactors.hrFactor.toFixed(2)}
+        </span>
+      </div>
+
+      {hitter.seasonStats && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          {[
+            { label: 'AVG', val: fmt(hitter.seasonStats.avg) },
+            { label: 'SLG', val: fmt(hitter.seasonStats.slg) },
+            { label: 'ISO', val: fmt(hitter.seasonStats.iso) },
+            { label: 'PA', val: String(hitter.seasonStats.paCount) },
+          ].map(({ label, val }) => (
+            <span key={label} className="stat-pill bg-slate-800 text-slate-300">
+              <span className="text-slate-500">{label}</span> {val}
+            </span>
+          ))}
+          {hitter.recentStats && (
+            <span className="stat-pill bg-slate-800 text-amber-300">
+              <span className="text-slate-500">L{hitter.recentStats.windowDays}</span>{' '}
+              {fmt(hitter.recentStats.avg)}/{fmt(hitter.recentStats.slg)}
+              {hitter.recentStats.hrCount > 0 && ` · ${hitter.recentStats.hrCount}HR`}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -203,17 +462,43 @@ function formatDisplayDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// A single activeView replaces the old activeSection + activeProp pair.
+// Prop views (hr/hit/run/rbi) sort PredictionCards by that prop.
+// hrr/totalbases show their own card types. games shows game picks.
+type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games';
+
+const PROP_VIEWS: PropType[] = ['hr', 'hit', 'run', 'rbi'];
+
+const PROP_LABELS: Record<PropType, string> = {
+  hr: 'Home Run',
+  hit: 'Hit',
+  run: 'Run',
+  rbi: 'RBI',
+};
+
 export default function Home() {
   const [data, setData] = useState<PredictionAPIResponse | null>(null);
+  const [gameData, setGameData] = useState<GamePredictionAPIResponse | null>(null);
+  const [hrResults, setHrResults] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [gamesLoading, setGamesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeProp, setActiveProp] = useState<PropType>('hr');
+  const [activeView, setActiveView] = useState<ActiveView>('hr');
   const [showRejected, setShowRejected] = useState(false);
   const [minProb, setMinProb] = useState(0);
   const [selectedDate, setSelectedDate] = useState<string>(getTodayET());
+  const [displayCount, setDisplayCount] = useState(20);
 
   const today = getTodayET();
   const isToday = selectedDate === today;
+  const isPastDate = selectedDate < today;
+
+  // Derived flags
+  const isGamesView = activeView === 'games';
+  const isHrrView = activeView === 'hrr';
+  const isTbView = activeView === 'totalbases';
+  const isPropView = (PROP_VIEWS as string[]).includes(activeView);
+  const activeProp = isPropView ? (activeView as PropType) : 'hr';
 
   const loadPredictions = useCallback(async (date: string) => {
     setLoading(true);
@@ -230,15 +515,52 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => { loadPredictions(selectedDate); }, [loadPredictions, selectedDate]);
+  const loadGamePredictions = useCallback(async (date: string) => {
+    setGamesLoading(true);
+    try {
+      const res = await fetch(`/api/games?date=${date}`);
+      if (!res.ok) return;
+      const json: GamePredictionAPIResponse = await res.json();
+      setGameData(json);
+    } catch {
+      // game picks are non-critical
+    } finally {
+      setGamesLoading(false);
+    }
+  }, []);
+
+  const loadHrResults = useCallback(async (date: string) => {
+    try {
+      const res = await fetch(`/api/results?date=${date}`);
+      if (!res.ok) return;
+      const json: GameResultsAPIResponse = await res.json();
+      setHrResults(new Set(json.hrHitterIds));
+    } catch {
+      setHrResults(new Set());
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPredictions(selectedDate);
+    loadGamePredictions(selectedDate);
+    if (selectedDate < getTodayET()) {
+      loadHrResults(selectedDate);
+    } else {
+      setHrResults(new Set());
+    }
+  }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate]);
+
+  useEffect(() => { setDisplayCount(20); }, [activeView]);
 
   function goToDate(date: string) {
     if (date > today) return;
     setSelectedDate(date);
     setData(null);
+    setGameData(null);
+    setHrResults(new Set());
   }
 
-  // Re-sort predictions based on active prop
+  // Sorted predictions for prop views
   const sortedPredictions = data
     ? [...data.predictions].sort((a, b) => b.probabilities[activeProp] - a.probabilities[activeProp])
     : [];
@@ -246,6 +568,25 @@ export default function Home() {
   const filteredPredictions = sortedPredictions.filter(
     p => p.probabilities[activeProp] >= minProb,
   );
+
+  // Hit + Run + RBI combined score
+  const hrrSorted = data
+    ? [...data.predictions]
+        .map(p => ({ pred: p, score: p.probabilities.hit + p.probabilities.run + p.probabilities.rbi }))
+        .sort((a, b) => b.score - a.score)
+    : [];
+
+  // Total bases: hit probability × average bases per hit (SLG / AVG)
+  const tbSorted = data
+    ? [...data.predictions]
+        .map(p => {
+          const avg = p.hitter.seasonStats?.avg ?? 0.26;
+          const slg = p.hitter.seasonStats?.slg ?? 0.42;
+          const basesPerHit = avg > 0 ? slg / avg : 1.6;
+          return { pred: p, projectedTB: p.probabilities.hit * basesPerHit };
+        })
+        .sort((a, b) => b.projectedTB - a.projectedTB)
+    : [];
 
   return (
     <div>
@@ -285,185 +626,407 @@ export default function Home() {
         )}
       </div>
 
-      {/* Controls bar */}
-      <div className="flex flex-wrap items-center gap-3 mb-6">
-        {/* Prop selector */}
-        <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1">
-          {(['hr', 'hit', 'run', 'rbi'] as PropType[]).map(p => (
+      {/* ── TOP NAV: Hitter Picks | Game Picks ─────────────────────────────────── */}
+      <div className="flex flex-wrap bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 mb-3 w-fit">
+        <button
+          onClick={() => { if (isGamesView) setActiveView('hr'); }}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            !isGamesView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Hitter Picks
+        </button>
+        <button
+          onClick={() => setActiveView('games')}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isGamesView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Game Picks
+        </button>
+      </div>
+
+      {/* ── SUB-NAV: shown when in any hitter view ──────────────────────────────── */}
+      {!isGamesView && (
+        <div className="flex flex-wrap bg-slate-900/50 border border-slate-800 rounded-lg p-1 gap-1 mb-5 w-fit">
+          {PROP_VIEWS.map(p => (
             <button
               key={p}
-              onClick={() => setActiveProp(p)}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                activeProp === p
-                  ? 'bg-mlb-navy text-white'
-                  : 'text-slate-400 hover:text-white'
+              onClick={() => setActiveView(p)}
+              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                activeView === p ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
               }`}
             >
               {PROP_LABELS[p]}
             </button>
           ))}
-        </div>
-
-        {/* Min probability filter */}
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-slate-400">Min prob:</span>
-          <select
-            value={minProb}
-            onChange={e => setMinProb(Number(e.target.value))}
-            className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-white text-sm"
-          >
-            <option value={0}>All</option>
-            {activeProp === 'hr' ? (
-              <>
-                <option value={0.05}>5%+</option>
-                <option value={0.08}>8%+</option>
-                <option value={0.12}>12%+</option>
-              </>
-            ) : (
-              <>
-                <option value={0.15}>15%+</option>
-                <option value={0.22}>22%+</option>
-                <option value={0.30}>30%+</option>
-              </>
-            )}
-          </select>
-        </div>
-
-        <button
-          onClick={() => loadPredictions(selectedDate)}
-          disabled={loading}
-          className="ml-auto px-4 py-1.5 bg-mlb-navy hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
-        >
-          {loading ? 'Loading...' : 'Refresh'}
-        </button>
-      </div>
-
-      {/* Status bar */}
-      {data && (
-        <div className="flex flex-wrap items-center gap-4 mb-5 text-xs text-slate-400">
-          <span>
-            <span className="text-white font-medium">{data.validatedHitters}</span> hitters validated
-            · <span className="text-white font-medium">{filteredPredictions.length}</span> shown
-            · <span className="text-white font-medium">{data.date}</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <HealthDot status={data.sourceHealth.schedule} /> Schedule
-            <HealthDot status={data.sourceHealth.rosterData} /> Rosters
-            <HealthDot status={data.sourceHealth.hitterStats} /> Stats
-            <HealthDot status={data.sourceHealth.weather} /> Weather
-          </span>
-          <span className="text-slate-600">
-            Generated {new Date(data.generatedAt).toLocaleTimeString()}
-          </span>
-        </div>
-      )}
-
-      {/* Warnings */}
-      {data?.warnings && data.warnings.length > 0 && (
-        <div className="mb-4 p-3 bg-yellow-950/40 border border-yellow-900/50 rounded-lg">
-          <div className="text-yellow-400 text-xs font-medium mb-1">Warnings</div>
-          {data.warnings.slice(0, 3).map((w, i) => (
-            <div key={i} className="text-yellow-300/70 text-xs">{w}</div>
-          ))}
-        </div>
-      )}
-
-      {/* Error state */}
-      {error && (
-        <div className="p-6 text-center">
-          <div className="text-red-400 font-medium mb-1">Failed to load predictions</div>
-          <div className="text-slate-500 text-sm">{error}</div>
+          <div className="w-px bg-slate-700 mx-1 self-stretch" />
           <button
-            onClick={() => loadPredictions(selectedDate)}
-            className="mt-3 px-4 py-2 bg-mlb-navy text-white text-sm rounded-lg"
+            onClick={() => setActiveView('hrr')}
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+              isHrrView ? 'bg-purple-800 text-white' : 'text-slate-400 hover:text-white'
+            }`}
           >
-            Retry
+            Hit+Run+RBI
+          </button>
+          <button
+            onClick={() => setActiveView('totalbases')}
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+              isTbView ? 'bg-amber-800 text-white' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Total Bases
           </button>
         </div>
       )}
 
-      {/* Loading skeleton */}
-      {loading && !data && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {Array.from({ length: 9 }).map((_, i) => (
-            <div key={i} className="card animate-pulse">
-              <div className="h-4 bg-slate-800 rounded w-40 mb-2" />
-              <div className="h-3 bg-slate-800 rounded w-24 mb-4" />
-              <div className="h-1.5 bg-slate-800 rounded-full mb-4" />
-              <div className="grid grid-cols-4 gap-1.5 mb-4">
-                {[...Array(4)].map((_, j) => (
-                  <div key={j} className="h-12 bg-slate-800 rounded-lg" />
-                ))}
-              </div>
-              <div className="space-y-2">
-                <div className="h-3 bg-slate-800 rounded w-full" />
-                <div className="h-3 bg-slate-800 rounded w-4/5" />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* No games */}
-      {!loading && data && data.predictions.length === 0 && (
-        <div className="text-center py-16">
-          <div className="text-4xl mb-3">⚾</div>
-          <div className="text-slate-300 font-medium">No predictions available</div>
-          <div className="text-slate-500 text-sm mt-1">
-            {data.warnings[0] ?? 'No games may be scheduled for today'}
-          </div>
-        </div>
-      )}
-
-      {/* No results after filter */}
-      {!loading && data && data.predictions.length > 0 && filteredPredictions.length === 0 && (
-        <div className="text-center py-10">
-          <div className="text-slate-400">No hitters meet the minimum probability filter.</div>
-          <button
-            onClick={() => setMinProb(0)}
-            className="mt-2 text-blue-400 text-sm hover:underline"
-          >
-            Clear filter
-          </button>
-        </div>
-      )}
-
-      {/* Prediction grid */}
-      {!loading && filteredPredictions.length > 0 && (
+      {/* ── HITTER PROP VIEWS (hr / hit / run / rbi) ────────────────────────────── */}
+      {isPropView && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filteredPredictions.map((pred, i) => (
-              <PredictionCard
-                key={`${pred.hitter.id}-${pred.game.gamePk}`}
-                pred={pred}
-                rank={i + 1}
-                activeProp={activeProp}
-              />
-            ))}
+          {/* Controls bar */}
+          <div className="flex flex-wrap items-center gap-3 mb-6">
+            {/* Min probability filter */}
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-slate-400">Min prob:</span>
+              <select
+                value={minProb}
+                onChange={e => setMinProb(Number(e.target.value))}
+                className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-white text-sm"
+              >
+                <option value={0}>All</option>
+                {activeProp === 'hr' ? (
+                  <>
+                    <option value={0.05}>5%+</option>
+                    <option value={0.08}>8%+</option>
+                    <option value={0.12}>12%+</option>
+                  </>
+                ) : (
+                  <>
+                    <option value={0.15}>15%+</option>
+                    <option value={0.22}>22%+</option>
+                    <option value={0.30}>30%+</option>
+                  </>
+                )}
+              </select>
+            </div>
+
+            <button
+              onClick={() => loadPredictions(selectedDate)}
+              disabled={loading}
+              className="ml-auto px-4 py-1.5 bg-mlb-navy hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {loading ? 'Loading...' : 'Refresh'}
+            </button>
           </div>
 
-          {/* Rejection log toggle */}
-          {data && data.rejectionLog.length > 0 && (
-            <div className="mt-8">
+          {/* Status bar */}
+          {data && (
+            <div className="flex flex-wrap items-center gap-4 mb-5 text-xs text-slate-400">
+              <span>
+                <span className="text-white font-medium">{data.validatedHitters}</span> hitters validated
+                · <span className="text-white font-medium">{filteredPredictions.length}</span> shown
+                · <span className="text-white font-medium">{data.date}</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <HealthDot status={data.sourceHealth.schedule} /> Schedule
+                <HealthDot status={data.sourceHealth.rosterData} /> Rosters
+                <HealthDot status={data.sourceHealth.hitterStats} /> Stats
+                <HealthDot status={data.sourceHealth.weather} /> Weather
+              </span>
+              <span className="text-slate-600">
+                Generated {new Date(data.generatedAt).toLocaleTimeString()}
+              </span>
+              {isPastDate && hrResults.size === 0 && (
+                <span className="text-slate-600">Loading results...</span>
+              )}
+              {isPastDate && hrResults.size > 0 && (
+                <span className="text-green-600">{hrResults.size} HR(s) hit that day</span>
+              )}
+            </div>
+          )}
+
+          {/* Warnings */}
+          {data?.warnings && data.warnings.length > 0 && (
+            <div className="mb-4 p-3 bg-yellow-950/40 border border-yellow-900/50 rounded-lg">
+              <div className="text-yellow-400 text-xs font-medium mb-1">Warnings</div>
+              {data.warnings.slice(0, 3).map((w, i) => (
+                <div key={i} className="text-yellow-300/70 text-xs">{w}</div>
+              ))}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="p-6 text-center">
+              <div className="text-red-400 font-medium mb-1">Failed to load predictions</div>
+              <div className="text-slate-500 text-sm">{error}</div>
               <button
-                onClick={() => setShowRejected(r => !r)}
-                className="text-slate-500 hover:text-slate-300 text-sm transition-colors"
+                onClick={() => loadPredictions(selectedDate)}
+                className="mt-3 px-4 py-2 bg-mlb-navy text-white text-sm rounded-lg"
               >
-                {showRejected ? 'Hide' : 'Show'} rejection log ({data.rejectionLog.length} players)
+                Retry
               </button>
-              {showRejected && (
-                <div className="mt-3 card">
-                  <div className="text-slate-400 text-xs font-medium mb-2">Rejection Log</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-64 overflow-y-auto">
-                    {data.rejectionLog.map((r, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs">
-                        <span className="text-slate-300">{r.name}</span>
-                        <span className="stat-pill bg-slate-800 text-slate-400">{r.reason}</span>
-                      </div>
-                    ))}
+            </div>
+          )}
+
+          {/* Loading skeleton */}
+          {loading && !data && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {Array.from({ length: 9 }).map((_, i) => (
+                <div key={i} className="card animate-pulse">
+                  <div className="h-4 bg-slate-800 rounded w-40 mb-2" />
+                  <div className="h-3 bg-slate-800 rounded w-24 mb-4" />
+                  <div className="h-1.5 bg-slate-800 rounded-full mb-4" />
+                  <div className="grid grid-cols-4 gap-1.5 mb-4">
+                    {[...Array(4)].map((_, j) => <div key={j} className="h-12 bg-slate-800 rounded-lg" />)}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="h-3 bg-slate-800 rounded w-full" />
+                    <div className="h-3 bg-slate-800 rounded w-4/5" />
                   </div>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && data && data.predictions.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-4xl mb-3">⚾</div>
+              <div className="text-slate-300 font-medium">No predictions available</div>
+              <div className="text-slate-500 text-sm mt-1">
+                {data.warnings[0] ?? 'No games may be scheduled for today'}
+              </div>
+            </div>
+          )}
+
+          {!loading && data && data.predictions.length > 0 && filteredPredictions.length === 0 && (
+            <div className="text-center py-10">
+              <div className="text-slate-400">No hitters meet the minimum probability filter.</div>
+              <button onClick={() => setMinProb(0)} className="mt-2 text-blue-400 text-sm hover:underline">
+                Clear filter
+              </button>
+            </div>
+          )}
+
+          {!loading && filteredPredictions.length > 0 && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {filteredPredictions.slice(0, displayCount).map((pred, i) => {
+                  const hrResult: 'hit' | 'miss' | 'unknown' = isPastDate
+                    ? hrResults.has(pred.hitter.id) ? 'hit' : 'miss'
+                    : 'unknown';
+                  return (
+                    <PredictionCard
+                      key={`${pred.hitter.id}-${pred.game.gamePk}`}
+                      pred={pred}
+                      rank={i + 1}
+                      activeProp={activeProp}
+                      hrResult={hrResult}
+                    />
+                  );
+                })}
+              </div>
+
+              {filteredPredictions.length > displayCount && (
+                <div className="mt-6 text-center">
+                  <button
+                    onClick={() => setDisplayCount(c => c + 20)}
+                    className="px-6 py-2 bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg hover:border-slate-500 hover:text-white transition-colors"
+                  >
+                    Load more ({filteredPredictions.length - displayCount} remaining)
+                  </button>
+                </div>
               )}
+
+              {data && data.rejectionLog.length > 0 && (
+                <div className="mt-8">
+                  <button
+                    onClick={() => setShowRejected(r => !r)}
+                    className="text-slate-500 hover:text-slate-300 text-sm transition-colors"
+                  >
+                    {showRejected ? 'Hide' : 'Show'} rejection log ({data.rejectionLog.length} players)
+                  </button>
+                  {showRejected && (
+                    <div className="mt-3 card">
+                      <div className="text-slate-400 text-xs font-medium mb-2">Rejection Log</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-64 overflow-y-auto">
+                        {data.rejectionLog.map((r, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs">
+                            <span className="text-slate-300">{r.name}</span>
+                            <span className="stat-pill bg-slate-800 text-slate-400">{r.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* ── HIT + RUN + RBI ─────────────────────────────────────────────────────── */}
+      {isHrrView && (
+        <>
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-slate-400 text-sm">
+              Combined Hit + Run + RBI probability score. Higher = more likely to contribute across all three props.
+            </p>
+            <button
+              onClick={() => loadPredictions(selectedDate)}
+              disabled={loading}
+              className="px-4 py-1.5 bg-purple-900 hover:bg-purple-800 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {loading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+
+          {loading && !data && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="card animate-pulse">
+                  <div className="h-4 bg-slate-800 rounded w-40 mb-2" />
+                  <div className="h-3 bg-slate-800 rounded w-24 mb-4" />
+                  <div className="h-1.5 bg-slate-800 rounded-full mb-4" />
+                  <div className="grid grid-cols-4 gap-1.5 mb-4">
+                    {[...Array(4)].map((_, j) => <div key={j} className="h-12 bg-slate-800 rounded-lg" />)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && hrrSorted.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-4xl mb-3">⚾</div>
+              <div className="text-slate-300 font-medium">No predictions available</div>
+            </div>
+          )}
+
+          {!loading && hrrSorted.length > 0 && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {hrrSorted.slice(0, displayCount).map(({ pred, score }, i) => (
+                  <HRRCard key={`${pred.hitter.id}-${pred.game.gamePk}`} pred={pred} rank={i + 1} score={score} />
+                ))}
+              </div>
+              {hrrSorted.length > displayCount && (
+                <div className="mt-6 text-center">
+                  <button
+                    onClick={() => setDisplayCount(c => c + 20)}
+                    className="px-6 py-2 bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg hover:border-slate-500 hover:text-white transition-colors"
+                  >
+                    Load more ({hrrSorted.length - displayCount} remaining)
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* ── TOTAL BASES ─────────────────────────────────────────────────────────── */}
+      {isTbView && (
+        <>
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-slate-400 text-sm">
+              Projected total bases = hit probability × avg bases per hit (SLG ÷ AVG). Higher xTB = elite contact + power combination.
+            </p>
+            <button
+              onClick={() => loadPredictions(selectedDate)}
+              disabled={loading}
+              className="px-4 py-1.5 bg-amber-900 hover:bg-amber-800 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {loading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+
+          {loading && !data && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="card animate-pulse">
+                  <div className="h-4 bg-slate-800 rounded w-40 mb-2" />
+                  <div className="h-3 bg-slate-800 rounded w-24 mb-4" />
+                  <div className="h-1.5 bg-slate-800 rounded-full mb-4" />
+                  <div className="grid grid-cols-3 gap-1.5 mb-4">
+                    {[...Array(3)].map((_, j) => <div key={j} className="h-12 bg-slate-800 rounded-lg" />)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && tbSorted.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-4xl mb-3">⚾</div>
+              <div className="text-slate-300 font-medium">No predictions available</div>
+            </div>
+          )}
+
+          {!loading && tbSorted.length > 0 && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {tbSorted.slice(0, displayCount).map(({ pred, projectedTB }, i) => (
+                  <TotalBasesCard key={`${pred.hitter.id}-${pred.game.gamePk}`} pred={pred} rank={i + 1} projectedTB={projectedTB} />
+                ))}
+              </div>
+              {tbSorted.length > displayCount && (
+                <div className="mt-6 text-center">
+                  <button
+                    onClick={() => setDisplayCount(c => c + 20)}
+                    className="px-6 py-2 bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg hover:border-slate-500 hover:text-white transition-colors"
+                  >
+                    Load more ({tbSorted.length - displayCount} remaining)
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* ── GAME PICKS ──────────────────────────────────────────────────────────── */}
+      {isGamesView && (
+        <>
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-slate-400 text-sm">
+              Win probability and spread leans based on starting pitching matchups and park factors.
+            </p>
+            <button
+              onClick={() => loadGamePredictions(selectedDate)}
+              disabled={gamesLoading}
+              className="px-4 py-1.5 bg-mlb-navy hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {gamesLoading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+
+          {gamesLoading && !gameData && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="card animate-pulse">
+                  <div className="h-4 bg-slate-800 rounded w-full mb-3" />
+                  <div className="h-2 bg-slate-800 rounded-full mb-3" />
+                  <div className="h-4 bg-slate-800 rounded w-32 mb-2" />
+                  <div className="h-3 bg-slate-800 rounded w-full" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!gamesLoading && gameData && gameData.games.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-4xl mb-3">⚾</div>
+              <div className="text-slate-300 font-medium">No games scheduled</div>
+            </div>
+          )}
+
+          {gameData && gameData.games.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {gameData.games.map(game => (
+                <GamePickCard key={game.gamePk} game={game} />
+              ))}
             </div>
           )}
         </>

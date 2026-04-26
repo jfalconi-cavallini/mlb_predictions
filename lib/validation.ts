@@ -34,22 +34,12 @@ function isHitterPosition(positionAbbr: string): boolean {
 }
 
 // ─── VULN-06 FIX: Normalized name comparison ──────────────────────────────────
-// The old check was: NON_MLB_SPORT_NAMES.has(name)
-// This is exact string equality — bypassed by:
-//   - "cade cunningham" (lowercase)
-//   - "Cade  Cunningham" (double space)
-//   - "CADE CUNNINGHAM" (all caps)
-//   - "Cunningham, Cade" (last-first format)
-//
-// Fix: normalize to lowercase, collapse runs of whitespace, trim before checking.
-// The banned names set is pre-normalized at startup.
 
 const NORMALIZED_NON_MLB_NAMES: Set<string> = new Set(
   [...NON_MLB_SPORT_NAMES].map(normalizeName)
 );
 
 function normalizeName(name: string): string {
-  // lowercase, collapse multiple spaces to single, trim edges
   return name.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
@@ -117,6 +107,12 @@ export interface RawPlayerInput {
   position: string;
 }
 
+interface PendingPlayer {
+  rawPlayer: RosterHitter;
+  teamId: number;
+  gamePk: number;
+}
+
 export async function validateAndBuildHitterPool(
   todaysTeamIds: Set<number>,
   teamGameMap: Map<number, number>,
@@ -126,12 +122,22 @@ export async function validateAndBuildHitterPool(
   const rejected: ValidationResult['rejected'] = [];
   const validatedAt = new Date().toISOString();
 
-  for (const teamId of todaysTeamIds) {
+  // ── STEP 1: Fetch all team rosters in parallel ───────────────────────────────
+  const rosterFetches = await Promise.all(
+    [...todaysTeamIds].map(async (teamId) => {
+      if (!VALID_MLB_TEAM_IDS.has(teamId)) {
+        return { teamId, hitters: [], valid: false };
+      }
+      const result = await fetchActiveRoster(teamId);
+      return { teamId, hitters: result.hitters, valid: true };
+    })
+  );
 
-    // Outer guard: every teamId in the set must be a valid MLB team
-    // (schedule fetch already does this, but we enforce it again here
-    // in case todaysTeamIds is ever populated by a non-schedule path)
-    if (!VALID_MLB_TEAM_IDS.has(teamId)) {
+  // ── STEP 2: Sync validation — collect players that need stat fetches ─────────
+  const pending: PendingPlayer[] = [];
+
+  for (const { teamId, hitters, valid } of rosterFetches) {
+    if (!valid) {
       rejected.push({
         rawName: `[Team ${teamId}]`, rawId: null,
         reason: 'NOT_IN_TODAYS_SLATE',
@@ -140,45 +146,27 @@ export async function validateAndBuildHitterPool(
       continue;
     }
 
-    const { hitters: rosterHitters, warnings } = await fetchActiveRoster(teamId);
-
-    for (const rawPlayer of rosterHitters) {
-
-      // ── CHECK 1: Valid MLB player ID ─────────────────────────────────────────
+    for (const rawPlayer of hitters) {
       if (!rawPlayer.id || !Number.isInteger(rawPlayer.id) || rawPlayer.id <= 0) {
         rejected.push({ rawName: rawPlayer.fullName, rawId: null, reason: 'NO_MLB_ID', detail: 'Missing or non-integer MLB player ID' });
         continue;
       }
 
-      // ── CHECK 2: Cross-sport ID canary ────────────────────────────────────────
       if (KNOWN_NON_MLB_IDS.has(rawPlayer.id)) {
         rejected.push({ rawName: rawPlayer.fullName, rawId: rawPlayer.id, reason: 'WRONG_SPORT', detail: `Player ID ${rawPlayer.id} is a known non-MLB canary ID` });
         continue;
       }
 
-      // ── CHECK 3: Cross-sport name ban (VULN-06 PATCHED) ───────────────────────
-      // Now uses normalized comparison (lowercase, collapsed spaces)
       if (isKnownNonMLBName(rawPlayer.fullName)) {
         rejected.push({ rawName: rawPlayer.fullName, rawId: rawPlayer.id, reason: 'WRONG_SPORT', detail: `"${rawPlayer.fullName}" matches known non-MLB athlete (normalized)` });
         continue;
       }
 
-      // ── CHECK 4: Hitter position ──────────────────────────────────────────────
       if (!isHitterPosition(rawPlayer.position)) {
-        // Pitchers are silently filtered, not rejection-logged (they are expected)
-        continue;
+        continue; // pitchers filtered silently
       }
 
-      // ── CHECK 5 (VULN-02 PATCHED): Player-team cross-reference ───────────────
-      // Old: `if (!todaysTeamIds.has(teamId)) { reject }` — DEAD CODE (always false
-      //   inside `for (teamId of todaysTeamIds)` loop).
-      //
-      // New: Verify the player's queriedTeamId (which team we fetched them from)
-      // matches the outer teamId. This catches a scenario where:
-      //   - We query /teams/147/roster (NYY)
-      //   - API returns a player stamped with queriedTeamId = 147
-      //   - That teamId must be in todaysTeamIds AND match the outer loop var
-      // Also verify the queried team has a game today via teamGameMap.
+      // VULN-05: queriedTeamId must match the outer teamId
       if (rawPlayer.queriedTeamId !== teamId) {
         rejected.push({ rawName: rawPlayer.fullName, rawId: rawPlayer.id, reason: 'NOT_IN_TODAYS_SLATE', detail: `queriedTeamId ${rawPlayer.queriedTeamId} !== outer teamId ${teamId} — data integrity violation` });
         continue;
@@ -189,59 +177,65 @@ export async function validateAndBuildHitterPool(
         continue;
       }
 
-      // ── CHECK 6: Deduplicate by player ID ────────────────────────────────────
       if (seenIds.has(rawPlayer.id)) {
         rejected.push({ rawName: rawPlayer.fullName, rawId: rawPlayer.id, reason: 'DUPLICATE_ID', detail: `Player ID ${rawPlayer.id} already processed — deduped` });
         continue;
       }
       seenIds.add(rawPlayer.id);
 
-      // ── CHECK 7 (VULN-04 PATCHED): gamePk must exist and be non-zero ─────────
-      // Old: `const gamePk = teamGameMap.get(teamId) ?? 0;`
-      // BUG: gamePk=0 is a false VALID state — player was marked VALID with
-      //   gamePk: 0, which means they have no actual game today.
-      //
-      // Fix: Missing gamePk is a hard rejection.
+      // VULN-04: gamePk=0 is a hard rejection
       const gamePk = teamGameMap.get(teamId);
       if (!gamePk || gamePk === 0) {
         rejected.push({ rawName: rawPlayer.fullName, rawId: rawPlayer.id, reason: 'NO_GAME_TODAY', detail: `No gamePk found for team ${teamId} in today's schedule — player has no game today` });
         continue;
       }
 
-      // ── FETCH: season stats, handedness, recent stats ─────────────────────────
-      const seasonStats = await fetchHitterSeasonStats(rawPlayer.id, CURRENT_SEASON);
-      const batHand: Hand = await fetchHitterHand(rawPlayer.id);
-      const recentStats = await fetchHitterRecentStats(rawPlayer.id, CURRENT_SEASON, 14);
-
-      // ── BUILD VALIDATED MLBHitter ─────────────────────────────────────────────
-      const team: MLBTeam = {
-        id: teamId,
-        name: '',        // enriched by caller
-        abbreviation: '',
-        franchiseName: '',
-      };
-
-      const hitter: MLBHitter = {
-        id: rawPlayer.id,
-        fullName: rawPlayer.fullName,
-        team,
-        batHand,
-        primaryPosition: rawPlayer.position,
-        isHitter: true,
-        seasonStats: seasonStats ?? null,
-        recentStats: recentStats ?? null,
-        validationMeta: buildValidMeta(rawPlayer.id, teamId, gamePk, 'PRE_LINEUP'),
-      };
-
-      accepted.push(hitter);
+      pending.push({ rawPlayer, teamId, gamePk });
     }
+  }
+
+  // ── STEP 3: Fetch all player stats in parallel ───────────────────────────────
+  // For each valid player, the 3 stat calls (season, hand, recent) also run in parallel.
+  const statsFetches = await Promise.all(
+    pending.map(({ rawPlayer, teamId, gamePk }) =>
+      Promise.all([
+        fetchHitterSeasonStats(rawPlayer.id, CURRENT_SEASON),
+        fetchHitterHand(rawPlayer.id),
+        fetchHitterRecentStats(rawPlayer.id, CURRENT_SEASON, 14),
+      ]).then(([seasonStats, batHand, recentStats]) => ({
+        rawPlayer, teamId, gamePk, seasonStats, batHand, recentStats,
+      }))
+    )
+  );
+
+  // ── STEP 4: Build accepted hitters ──────────────────────────────────────────
+  for (const { rawPlayer, teamId, gamePk, seasonStats, batHand, recentStats } of statsFetches) {
+    const team: MLBTeam = {
+      id: teamId,
+      name: '',        // enriched by caller
+      abbreviation: '',
+      franchiseName: '',
+    };
+
+    const hitter: MLBHitter = {
+      id: rawPlayer.id,
+      fullName: rawPlayer.fullName,
+      team,
+      batHand,
+      primaryPosition: rawPlayer.position,
+      isHitter: true,
+      seasonStats: seasonStats ?? null,
+      recentStats: recentStats ?? null,
+      validationMeta: buildValidMeta(rawPlayer.id, teamId, gamePk, 'PRE_LINEUP'),
+    };
+
+    accepted.push(hitter);
   }
 
   return { accepted, rejected, todaysTeamIds, validatedAt };
 }
 
 // ─── REGRESSION TEST EXPORTS ──────────────────────────────────────────────────
-// These are called by the test suite AND by /api/validate at runtime.
 
 export function testRejectCadeCunningham(): boolean {
   const fakeCade: RawPlayerInput = {
@@ -255,13 +249,12 @@ export function testRejectCadeCunningham(): boolean {
   );
 }
 
-// VULN-06 REGRESSION: name variants that previously bypassed the check
 export function testNormalizedNameRejection(): boolean {
   const variants = [
-    'cade cunningham',          // lowercase
-    'CADE CUNNINGHAM',          // uppercase
-    'Cade  Cunningham',         // double space
-    '  Cade Cunningham  ',      // leading/trailing spaces
+    'cade cunningham',
+    'CADE CUNNINGHAM',
+    'Cade  Cunningham',
+    '  Cade Cunningham  ',
   ];
   return variants.every(v => isKnownNonMLBName(v));
 }
@@ -272,65 +265,52 @@ export function testRejectInvalidTeamId(): boolean {
 
 export function testHitterPositionFilter(): boolean {
   const valid = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'OF', 'DH', 'IF', 'TWP'];
-  // VULN-07 test: lowercase position strings must also be rejected
   const invalid = ['P', 'SP', 'RP', 'CL', 'G', 'F', 'QB', 'p', 'sp'];
   return valid.every(isHitterPosition) && invalid.every(p => !isHitterPosition(p));
 }
 
-// VULN-09 PATCHED: replaces the vacuous Set.has() test with a real pipeline check
 export function testDeduplication(): boolean {
-  // Simulate two roster entries with the same player ID (e.g. a two-team trade API artifact)
   const seenIds = new Set<number>();
-  const playerId = 660271; // Ohtani's real MLB ID as a realistic value
+  const playerId = 660271;
 
-  // First encounter — should succeed
   const firstResult = (() => {
     if (seenIds.has(playerId)) return false;
     seenIds.add(playerId);
     return true;
   })();
 
-  // Second encounter with same ID — should be rejected
   const secondResult = (() => {
-    if (seenIds.has(playerId)) return false; // duplicate → reject
+    if (seenIds.has(playerId)) return false;
     seenIds.add(playerId);
     return true;
   })();
 
-  // Only first should have passed, second must be blocked
   return firstResult === true && secondResult === false;
 }
 
-// VULN-04 REGRESSION: gamePk=0 must be a rejection
 export function testGamePkZeroRejection(): boolean {
-  // Simulate: teamGameMap has no entry for this team
   const teamGameMap = new Map<number, number>();
-  const teamId = 147; // NYY — valid team but no game in map
-  const gamePk = teamGameMap.get(teamId); // undefined
-  // Old code: `?? 0` would return 0 and mark VALID
-  // New code: undefined → reject
+  const teamId = 147;
+  const gamePk = teamGameMap.get(teamId);
   return gamePk === undefined || gamePk === 0;
 }
 
-// VULN-05 REGRESSION: queriedTeamId mismatch must be a rejection
 export function testTeamIdCrossCheck(): boolean {
-  const outerTeamId = 147; // NYY — what we queried
+  const outerTeamId = 147;
   const fakePlayer: RosterHitter = {
     id: 123456,
     fullName: 'Stale Player',
     position: '1B',
-    queriedTeamId: 143, // PHI — what the API claims, mismatch!
+    queriedTeamId: 143,
   };
-  // If queriedTeamId !== outerTeamId, must reject
   return fakePlayer.queriedTeamId !== outerTeamId;
 }
 
-// VULN-01 REGRESSION: null status must be rejected
 export function testNullStatusRejection(): boolean {
-  // Simulate the API returning an entry with no status field
   const nullStatus = null as { code: string } | null | undefined;
   const statusCode = nullStatus?.code ?? null;
-  // Old: `if (entry.status?.code && ...)` — undefined && anything = false → skipped continue
-  // New: statusCode === null → should be rejected
-  return statusCode === null; // true = would be rejected
+  return statusCode === null;
 }
+
+// Suppress unused import warning — buildRejectedMeta is kept for test/validation use
+void buildRejectedMeta;

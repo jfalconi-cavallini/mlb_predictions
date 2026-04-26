@@ -245,6 +245,43 @@ export async function fetchPitcherStats(
   }
 }
 
+// ─── GAME BOXSCORE (ACTUAL RESULTS) ──────────────────────────────────────────
+
+interface BoxscoreAPIResponse {
+  teams: {
+    home: {
+      players: Record<string, {
+        person: { id: number };
+        stats?: { batting?: { homeRuns?: number } };
+      }>;
+    };
+    away: {
+      players: Record<string, {
+        person: { id: number };
+        stats?: { batting?: { homeRuns?: number } };
+      }>;
+    };
+  };
+}
+
+export async function fetchGameBoxscore(gamePk: number): Promise<{ hrHitters: number[] }> {
+  try {
+    const data = await mlbFetch<BoxscoreAPIResponse>(`${BASE}/game/${gamePk}/boxscore`);
+    const hrHitters: number[] = [];
+    for (const side of ['home', 'away'] as const) {
+      for (const key of Object.keys(data.teams[side].players)) {
+        const player = data.teams[side].players[key];
+        if (Number(player.stats?.batting?.homeRuns ?? 0) > 0) {
+          hrHitters.push(player.person.id);
+        }
+      }
+    }
+    return { hrHitters };
+  } catch {
+    return { hrHitters: [] };
+  }
+}
+
 // ─── TODAY'S SCHEDULE ─────────────────────────────────────────────────────────
 
 interface ScheduleAPIRaw {
