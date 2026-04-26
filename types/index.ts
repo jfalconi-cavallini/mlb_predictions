@@ -294,9 +294,19 @@ export interface GamePredictionAPIResponse {
   warnings: string[];
 }
 
+export interface PlayerGameResult {
+  hits: number;
+  atBats: number;
+  runs: number;
+  rbi: number;
+  homeRuns: number;
+  totalBases: number;
+}
+
 export interface GameResultsAPIResponse {
   date: string;
   hrHitterIds: number[];
+  playerStats: Record<string, PlayerGameResult>;
   gamesChecked: number;
 }
 

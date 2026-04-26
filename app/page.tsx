@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier, GamePredictionAPIResponse, GamePrediction, GameResultsAPIResponse } from '../types';
+import { PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier, GamePredictionAPIResponse, GamePrediction, GameResultsAPIResponse, PlayerGameResult } from '../types';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -30,35 +30,56 @@ function probBarColor(prob: number): string {
   return 'bg-slate-600';
 }
 
+// ─── RESULT HELPERS ───────────────────────────────────────────────────────────
+
+function propHit(prop: PropType, result: PlayerGameResult): boolean {
+  if (prop === 'hit') return result.hits > 0;
+  if (prop === 'run') return result.runs > 0;
+  if (prop === 'rbi') return result.rbi > 0;
+  return result.homeRuns > 0;
+}
+
+function propStatLabel(prop: PropType, result: PlayerGameResult): string {
+  if (prop === 'hit') return `${result.hits}H / ${result.atBats}AB`;
+  if (prop === 'run') return `${result.runs}R`;
+  if (prop === 'rbi') return `${result.rbi}RBI`;
+  return `${result.homeRuns}HR`;
+}
+
 // ─── PREDICTION CARD ──────────────────────────────────────────────────────────
 
 function PredictionCard({
   pred,
   rank,
   activeProp,
-  hrResult,
+  playerResult,
 }: {
   pred: HitterPrediction;
   rank: number;
   activeProp: PropType;
-  hrResult: 'hit' | 'miss' | 'unknown';
+  playerResult: PlayerGameResult | null;
 }) {
   const { hitter, game, opposingPitcher, parkFactors, probabilities, explanations, lineupStatus } = pred;
   const explanation = explanations.find(e => e.prop === activeProp);
   const prob = probabilities[activeProp];
   const matchup = `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
 
+  const isHit = playerResult ? propHit(activeProp, playerResult) : null;
+
   const resultBorder =
-    hrResult === 'hit' ? 'border-green-600 ring-1 ring-green-600/40' :
-    hrResult === 'miss' ? 'border-red-800 ring-1 ring-red-800/30' :
+    isHit === true ? 'border-green-600 ring-1 ring-green-600/40' :
+    isHit === false ? 'border-red-800 ring-1 ring-red-800/30' :
     '';
 
-  const resultBadge =
-    hrResult === 'hit' ? (
-      <span className="text-xs font-bold text-green-400 bg-green-950/60 px-2 py-0.5 rounded-full border border-green-700">HR</span>
-    ) : hrResult === 'miss' ? (
-      <span className="text-xs font-bold text-red-400 bg-red-950/60 px-2 py-0.5 rounded-full border border-red-800">No HR</span>
-    ) : null;
+  const statLabel = playerResult ? propStatLabel(activeProp, playerResult) : null;
+
+  const resultBadge = statLabel ? (
+    <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+      isHit
+        ? 'text-green-400 bg-green-950/60 border-green-700'
+        : 'text-red-400 bg-red-950/60 border-red-800'
+    }`}>{statLabel}</span>
+  ) : null;
 
   return (
     <div className={`card hover:border-slate-700 transition-colors ${resultBorder}`}>
@@ -66,7 +87,7 @@ function PredictionCard({
         <div className="flex items-center gap-3">
           <span className="text-slate-500 font-mono text-sm w-6 shrink-0">#{rank}</span>
           <div>
-            <div className="font-bold text-white text-sm flex items-center gap-2">
+            <div className="font-bold text-white text-sm flex items-center gap-2 flex-wrap">
               {hitter.fullName}
               {resultBadge}
             </div>
@@ -105,18 +126,27 @@ function PredictionCard({
         />
       </div>
 
-      {/* All 4 prop probabilities */}
+      {/* All 4 prop probabilities + actual results if available */}
       <div className="grid grid-cols-4 gap-1.5 mb-3">
         {(['hr', 'hit', 'run', 'rbi'] as PropType[]).map(p => {
           const ex = explanations.find(e => e.prop === p);
+          const actualHit = playerResult ? propHit(p, playerResult) : null;
+          const actualLabel = playerResult ? propStatLabel(p, playerResult) : null;
           return (
             <div
               key={p}
-              className={`text-center p-1.5 rounded-lg ${activeProp === p ? 'bg-slate-800 ring-1 ring-slate-600' : 'bg-slate-900'}`}
+              className={`text-center p-1.5 rounded-lg ${
+                activeProp === p ? 'bg-slate-800 ring-1 ring-slate-600' : 'bg-slate-900'
+              } ${actualHit === true ? 'ring-1 ring-green-700/50' : actualHit === false ? 'ring-1 ring-red-900/50' : ''}`}
             >
               <div className="text-slate-400 text-xs uppercase tracking-wider">{p}</div>
               <div className="font-mono font-bold text-sm text-white">{pct(probabilities[p])}</div>
-              {ex && (
+              {actualLabel && (
+                <div className={`text-[10px] font-mono mt-0.5 ${actualHit ? 'text-green-400' : 'text-red-400'}`}>
+                  {actualLabel}
+                </div>
+              )}
+              {!actualLabel && ex && (
                 <span className={`stat-pill text-[10px] ${tierClass(ex.confidence)}`}>
                   {ex.confidence}
                 </span>
@@ -125,6 +155,26 @@ function PredictionCard({
           );
         })}
       </div>
+
+      {playerResult && (
+        <div className="flex flex-wrap gap-1.5 text-xs mb-3">
+          <span className="stat-pill bg-slate-800/80 text-slate-400 font-mono">
+            <span className="text-slate-500">RESULT</span>{' '}
+            <span className={playerResult.hits > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.hits}H</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-slate-300">{playerResult.atBats}AB</span>
+            {' · '}
+            <span className={playerResult.runs > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.runs}R</span>
+            {' · '}
+            <span className={playerResult.rbi > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.rbi}RBI</span>
+            {playerResult.homeRuns > 0 && (
+              <><span className="text-slate-600"> · </span><span className="text-yellow-400">{playerResult.homeRuns}HR</span></>
+            )}
+            {' · '}
+            <span className={playerResult.totalBases >= 2 ? 'text-green-400' : 'text-slate-400'}>{playerResult.totalBases}TB</span>
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 text-xs text-slate-400 mb-3">
         <span className="stat-pill bg-slate-800 text-slate-300">{matchup} · {game.gameTime} ET</span>
@@ -266,17 +316,46 @@ function GamePickCard({ game }: { game: GamePrediction }) {
 
 // ─── HRR CARD ─────────────────────────────────────────────────────────────────
 
-function HRRCard({ pred, rank, score }: { pred: HitterPrediction; rank: number; score: number }) {
+function HRRCard({
+  pred,
+  rank,
+  score,
+  playerResult,
+}: {
+  pred: HitterPrediction;
+  rank: number;
+  score: number;
+  playerResult: PlayerGameResult | null;
+}) {
   const { hitter, game, opposingPitcher, probabilities, explanations } = pred;
   const matchup = `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
 
+  const actualHRR = playerResult ? playerResult.hits + playerResult.runs + playerResult.rbi : null;
+  const hrrHit = actualHRR !== null ? actualHRR > 1.5 : null;
+
+  const resultBorder =
+    hrrHit === true ? 'border-green-600 ring-1 ring-green-600/40' :
+    hrrHit === false ? 'border-red-800 ring-1 ring-red-800/30' :
+    '';
+
   return (
-    <div className="card hover:border-slate-700 transition-colors">
+    <div className={`card hover:border-slate-700 transition-colors ${resultBorder}`}>
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
           <span className="text-slate-500 font-mono text-sm w-6 shrink-0">#{rank}</span>
           <div>
-            <div className="font-bold text-white text-sm">{hitter.fullName}</div>
+            <div className="font-bold text-white text-sm flex items-center gap-2 flex-wrap">
+              {hitter.fullName}
+              {actualHRR !== null && (
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                  hrrHit
+                    ? 'text-green-400 bg-green-950/60 border-green-700'
+                    : 'text-red-400 bg-red-950/60 border-red-800'
+                }`}>
+                  HRR {actualHRR} {hrrHit ? '✓ o1.5' : '✗ u1.5'}
+                </span>
+              )}
+            </div>
             <div className="text-slate-400 text-xs flex items-center gap-1.5 mt-0.5">
               <span>{hitter.team.abbreviation || hitter.team.name}</span>
               <span className="text-slate-600">·</span>
@@ -302,15 +381,46 @@ function HRRCard({ pred, rank, score }: { pred: HitterPrediction; rank: number; 
       <div className="grid grid-cols-4 gap-1.5 mb-3">
         {(['hr', 'hit', 'run', 'rbi'] as PropType[]).map(p => {
           const ex = explanations.find(e => e.prop === p);
+          const actualHit = playerResult ? propHit(p, playerResult) : null;
+          const actualLabel = playerResult ? propStatLabel(p, playerResult) : null;
           return (
-            <div key={p} className="text-center p-1.5 rounded-lg bg-slate-900">
+            <div key={p} className={`text-center p-1.5 rounded-lg bg-slate-900 ${
+              actualHit === true ? 'ring-1 ring-green-700/50' : actualHit === false ? 'ring-1 ring-red-900/50' : ''
+            }`}>
               <div className="text-slate-400 text-xs uppercase tracking-wider">{p}</div>
               <div className="font-mono font-bold text-sm text-white">{pct(probabilities[p])}</div>
-              {ex && <span className={`stat-pill text-[10px] ${tierClass(ex.confidence)}`}>{ex.confidence}</span>}
+              {actualLabel && (
+                <div className={`text-[10px] font-mono mt-0.5 ${actualHit ? 'text-green-400' : 'text-red-400'}`}>
+                  {actualLabel}
+                </div>
+              )}
+              {!actualLabel && ex && (
+                <span className={`stat-pill text-[10px] ${tierClass(ex.confidence)}`}>{ex.confidence}</span>
+              )}
             </div>
           );
         })}
       </div>
+
+      {playerResult && (
+        <div className="flex flex-wrap gap-1.5 text-xs mb-3">
+          <span className="stat-pill bg-slate-800/80 text-slate-400 font-mono">
+            <span className="text-slate-500">RESULT</span>{' '}
+            <span className={playerResult.hits > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.hits}H</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-slate-300">{playerResult.atBats}AB</span>
+            {' · '}
+            <span className={playerResult.runs > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.runs}R</span>
+            {' · '}
+            <span className={playerResult.rbi > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.rbi}RBI</span>
+            {playerResult.homeRuns > 0 && (
+              <><span className="text-slate-600"> · </span><span className="text-yellow-400">{playerResult.homeRuns}HR</span></>
+            )}
+            {' · '}
+            <span className={playerResult.totalBases >= 2 ? 'text-green-400' : 'text-slate-400'}>{playerResult.totalBases}TB</span>
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 text-xs text-slate-400 mb-3">
         <span className="stat-pill bg-slate-800 text-slate-300">{matchup} · {game.gameTime} ET</span>
@@ -348,20 +458,49 @@ function HRRCard({ pred, rank, score }: { pred: HitterPrediction; rank: number; 
 
 // ─── TOTAL BASES CARD ─────────────────────────────────────────────────────────
 
-function TotalBasesCard({ pred, rank, projectedTB }: { pred: HitterPrediction; rank: number; projectedTB: number }) {
+function TotalBasesCard({
+  pred,
+  rank,
+  projectedTB,
+  playerResult,
+}: {
+  pred: HitterPrediction;
+  rank: number;
+  projectedTB: number;
+  playerResult: PlayerGameResult | null;
+}) {
   const { hitter, game, opposingPitcher, probabilities, parkFactors } = pred;
   const matchup = `${game.awayTeam.abbreviation || game.awayTeam.name} @ ${game.homeTeam.abbreviation || game.homeTeam.name}`;
   const avg = hitter.seasonStats?.avg ?? 0;
   const slg = hitter.seasonStats?.slg ?? 0;
   const basesPerHit = avg > 0 ? slg / avg : 0;
 
+  const actualTB = playerResult?.totalBases ?? null;
+  const tbHit = actualTB !== null ? actualTB > 1.5 : null;
+
+  const resultBorder =
+    tbHit === true ? 'border-green-600 ring-1 ring-green-600/40' :
+    tbHit === false ? 'border-red-800 ring-1 ring-red-800/30' :
+    '';
+
   return (
-    <div className="card hover:border-slate-700 transition-colors">
+    <div className={`card hover:border-slate-700 transition-colors ${resultBorder}`}>
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
           <span className="text-slate-500 font-mono text-sm w-6 shrink-0">#{rank}</span>
           <div>
-            <div className="font-bold text-white text-sm">{hitter.fullName}</div>
+            <div className="font-bold text-white text-sm flex items-center gap-2 flex-wrap">
+              {hitter.fullName}
+              {actualTB !== null && (
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                  tbHit
+                    ? 'text-green-400 bg-green-950/60 border-green-700'
+                    : 'text-red-400 bg-red-950/60 border-red-800'
+                }`}>
+                  {actualTB}TB {tbHit ? '✓ o1.5' : '✗ u1.5'}
+                </span>
+              )}
+            </div>
             <div className="text-slate-400 text-xs flex items-center gap-1.5 mt-0.5">
               <span>{hitter.team.abbreviation || hitter.team.name}</span>
               <span className="text-slate-600">·</span>
@@ -388,16 +527,51 @@ function TotalBasesCard({ pred, rank, projectedTB }: { pred: HitterPrediction; r
         <div className="text-center p-1.5 rounded-lg bg-slate-900">
           <div className="text-slate-400 text-xs uppercase tracking-wider">Hit%</div>
           <div className="font-mono font-bold text-sm text-white">{pct(probabilities.hit)}</div>
+          {playerResult && (
+            <div className={`text-[10px] font-mono mt-0.5 ${playerResult.hits > 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {playerResult.hits}H/{playerResult.atBats}AB
+            </div>
+          )}
         </div>
         <div className="text-center p-1.5 rounded-lg bg-slate-900">
           <div className="text-slate-400 text-xs uppercase tracking-wider">xB/H</div>
           <div className="font-mono font-bold text-sm text-white">{basesPerHit > 0 ? basesPerHit.toFixed(2) : '—'}</div>
+          {playerResult && (
+            <div className={`text-[10px] font-mono mt-0.5 ${tbHit ? 'text-green-400' : 'text-red-400'}`}>
+              {actualTB}TB
+            </div>
+          )}
         </div>
         <div className="text-center p-1.5 rounded-lg bg-slate-900">
           <div className="text-slate-400 text-xs uppercase tracking-wider">HR%</div>
           <div className="font-mono font-bold text-sm text-white">{pct(probabilities.hr)}</div>
+          {playerResult && (
+            <div className={`text-[10px] font-mono mt-0.5 ${playerResult.homeRuns > 0 ? 'text-yellow-400' : 'text-slate-500'}`}>
+              {playerResult.homeRuns}HR
+            </div>
+          )}
         </div>
       </div>
+
+      {playerResult && (
+        <div className="flex flex-wrap gap-1.5 text-xs mb-3">
+          <span className="stat-pill bg-slate-800/80 text-slate-400 font-mono">
+            <span className="text-slate-500">RESULT</span>{' '}
+            <span className={playerResult.hits > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.hits}H</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-slate-300">{playerResult.atBats}AB</span>
+            {' · '}
+            <span className={playerResult.runs > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.runs}R</span>
+            {' · '}
+            <span className={playerResult.rbi > 0 ? 'text-green-400' : 'text-slate-400'}>{playerResult.rbi}RBI</span>
+            {playerResult.homeRuns > 0 && (
+              <><span className="text-slate-600"> · </span><span className="text-yellow-400">{playerResult.homeRuns}HR</span></>
+            )}
+            {' · '}
+            <span className={tbHit ? 'text-green-400' : 'text-slate-400'}>{actualTB}TB</span>
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 text-xs text-slate-400 mb-3">
         <span className="stat-pill bg-slate-800 text-slate-300">{matchup} · {game.gameTime} ET</span>
@@ -479,7 +653,7 @@ const PROP_LABELS: Record<PropType, string> = {
 export default function Home() {
   const [data, setData] = useState<PredictionAPIResponse | null>(null);
   const [gameData, setGameData] = useState<GamePredictionAPIResponse | null>(null);
-  const [hrResults, setHrResults] = useState<Set<number>>(new Set());
+  const [playerResults, setPlayerResults] = useState<Record<number, PlayerGameResult>>({});
   const [loading, setLoading] = useState(true);
   const [gamesLoading, setGamesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -534,9 +708,13 @@ export default function Home() {
       const res = await fetch(`/api/results?date=${date}`);
       if (!res.ok) return;
       const json: GameResultsAPIResponse = await res.json();
-      setHrResults(new Set(json.hrHitterIds));
+      const map: Record<number, PlayerGameResult> = {};
+      for (const [idStr, stats] of Object.entries(json.playerStats ?? {})) {
+        map[Number(idStr)] = stats;
+      }
+      setPlayerResults(map);
     } catch {
-      setHrResults(new Set());
+      setPlayerResults({});
     }
   }, []);
 
@@ -546,7 +724,7 @@ export default function Home() {
     if (selectedDate < getTodayET()) {
       loadHrResults(selectedDate);
     } else {
-      setHrResults(new Set());
+      setPlayerResults({});
     }
   }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate]);
 
@@ -557,7 +735,7 @@ export default function Home() {
     setSelectedDate(date);
     setData(null);
     setGameData(null);
-    setHrResults(new Set());
+    setPlayerResults({});
   }
 
   // Sorted predictions for prop views
@@ -736,11 +914,14 @@ export default function Home() {
               <span className="text-slate-600">
                 Generated {new Date(data.generatedAt).toLocaleTimeString()}
               </span>
-              {isPastDate && hrResults.size === 0 && (
+              {isPastDate && Object.keys(playerResults).length === 0 && (
                 <span className="text-slate-600">Loading results...</span>
               )}
-              {isPastDate && hrResults.size > 0 && (
-                <span className="text-green-600">{hrResults.size} HR(s) hit that day</span>
+              {isPastDate && Object.keys(playerResults).length > 0 && (
+                <span className="text-green-600">
+                  {Object.values(playerResults).filter(r => r.homeRuns > 0).length} HR ·{' '}
+                  {Object.values(playerResults).filter(r => r.hits > 0).length} got a hit that day
+                </span>
               )}
             </div>
           )}
@@ -811,20 +992,15 @@ export default function Home() {
           {!loading && filteredPredictions.length > 0 && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {filteredPredictions.slice(0, displayCount).map((pred, i) => {
-                  const hrResult: 'hit' | 'miss' | 'unknown' = isPastDate
-                    ? hrResults.has(pred.hitter.id) ? 'hit' : 'miss'
-                    : 'unknown';
-                  return (
-                    <PredictionCard
-                      key={`${pred.hitter.id}-${pred.game.gamePk}`}
-                      pred={pred}
-                      rank={i + 1}
-                      activeProp={activeProp}
-                      hrResult={hrResult}
-                    />
-                  );
-                })}
+                {filteredPredictions.slice(0, displayCount).map((pred, i) => (
+                  <PredictionCard
+                    key={`${pred.hitter.id}-${pred.game.gamePk}`}
+                    pred={pred}
+                    rank={i + 1}
+                    activeProp={activeProp}
+                    playerResult={isPastDate ? (playerResults[pred.hitter.id] ?? null) : null}
+                  />
+                ))}
               </div>
 
               {filteredPredictions.length > displayCount && (
@@ -908,7 +1084,13 @@ export default function Home() {
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {hrrSorted.slice(0, displayCount).map(({ pred, score }, i) => (
-                  <HRRCard key={`${pred.hitter.id}-${pred.game.gamePk}`} pred={pred} rank={i + 1} score={score} />
+                  <HRRCard
+                    key={`${pred.hitter.id}-${pred.game.gamePk}`}
+                    pred={pred}
+                    rank={i + 1}
+                    score={score}
+                    playerResult={isPastDate ? (playerResults[pred.hitter.id] ?? null) : null}
+                  />
                 ))}
               </div>
               {hrrSorted.length > displayCount && (
@@ -968,7 +1150,13 @@ export default function Home() {
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {tbSorted.slice(0, displayCount).map(({ pred, projectedTB }, i) => (
-                  <TotalBasesCard key={`${pred.hitter.id}-${pred.game.gamePk}`} pred={pred} rank={i + 1} projectedTB={projectedTB} />
+                  <TotalBasesCard
+                    key={`${pred.hitter.id}-${pred.game.gamePk}`}
+                    pred={pred}
+                    rank={i + 1}
+                    projectedTB={projectedTB}
+                    playerResult={isPastDate ? (playerResults[pred.hitter.id] ?? null) : null}
+                  />
                 ))}
               </div>
               {tbSorted.length > displayCount && (

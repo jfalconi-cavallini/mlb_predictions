@@ -247,38 +247,74 @@ export async function fetchPitcherStats(
 
 // ─── GAME BOXSCORE (ACTUAL RESULTS) ──────────────────────────────────────────
 
+interface BoxscoreBatting {
+  homeRuns?: number;
+  hits?: number;
+  atBats?: number;
+  runs?: number;
+  rbi?: number;
+  totalBases?: number;
+}
+
 interface BoxscoreAPIResponse {
   teams: {
     home: {
       players: Record<string, {
         person: { id: number };
-        stats?: { batting?: { homeRuns?: number } };
+        stats?: { batting?: BoxscoreBatting };
       }>;
     };
     away: {
       players: Record<string, {
         person: { id: number };
-        stats?: { batting?: { homeRuns?: number } };
+        stats?: { batting?: BoxscoreBatting };
       }>;
     };
   };
 }
 
-export async function fetchGameBoxscore(gamePk: number): Promise<{ hrHitters: number[] }> {
+export interface BoxscorePlayerResult {
+  hits: number;
+  atBats: number;
+  runs: number;
+  rbi: number;
+  homeRuns: number;
+  totalBases: number;
+}
+
+export async function fetchGameBoxscore(gamePk: number): Promise<{
+  hrHitters: number[];
+  playerStats: Record<number, BoxscorePlayerResult>;
+}> {
   try {
     const data = await mlbFetch<BoxscoreAPIResponse>(`${BASE}/game/${gamePk}/boxscore`);
     const hrHitters: number[] = [];
+    const playerStats: Record<number, BoxscorePlayerResult> = {};
+
     for (const side of ['home', 'away'] as const) {
       for (const key of Object.keys(data.teams[side].players)) {
         const player = data.teams[side].players[key];
-        if (Number(player.stats?.batting?.homeRuns ?? 0) > 0) {
-          hrHitters.push(player.person.id);
+        const batting = player.stats?.batting;
+        if (!batting) continue;
+
+        const homeRuns = Number(batting.homeRuns ?? 0);
+        const hits = Number(batting.hits ?? 0);
+        const atBats = Number(batting.atBats ?? 0);
+        const runs = Number(batting.runs ?? 0);
+        const rbi = Number(batting.rbi ?? 0);
+        const totalBases = Number(batting.totalBases ?? 0);
+
+        if (homeRuns > 0) hrHitters.push(player.person.id);
+
+        if (atBats > 0 || hits > 0 || runs > 0 || rbi > 0 || homeRuns > 0) {
+          playerStats[player.person.id] = { hits, atBats, runs, rbi, homeRuns, totalBases };
         }
       }
     }
-    return { hrHitters };
+
+    return { hrHitters, playerStats };
   } catch {
-    return { hrHitters: [] };
+    return { hrHitters: [], playerStats: {} };
   }
 }
 
