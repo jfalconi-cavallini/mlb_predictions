@@ -279,7 +279,9 @@ export interface GamePrediction {
   awayExpectedRuns: number;
   spreadLean: string;
   spreadLeanSide: 'home' | 'away' | null;
-  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  confidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
+  pickLabel: string;           // e.g. "NYY ML", "HOU ML", "Pick'em" — for record tracking
+  pickSide: 'home' | 'away' | null;
   venue: MLBGame['venue'];
   parkFactors: ParkFactors;
   gameTime: string;

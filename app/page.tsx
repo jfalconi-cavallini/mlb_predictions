@@ -229,29 +229,47 @@ function PredictionCard({
 // ─── GAME PICK CARD ───────────────────────────────────────────────────────────
 
 function GamePickCard({ game }: { game: GamePrediction }) {
-  const leanHome = game.spreadLeanSide === 'home';
-  const leanAway = game.spreadLeanSide === 'away';
+  const isLock = game.confidence === 'LOCK';
+  const isHigh = game.confidence === 'HIGH';
+  const pickHome = game.pickSide === 'home';
+  const pickAway = game.pickSide === 'away';
+
+  const cardClass = isLock
+    ? 'card border-yellow-500/50 ring-1 ring-yellow-500/15 hover:border-yellow-500/70'
+    : 'card hover:border-slate-700';
+
   const confColor =
-    game.confidence === 'HIGH' ? 'text-yellow-400' :
-    game.confidence === 'MEDIUM' ? 'text-blue-400' :
-    'text-slate-400';
+    isLock               ? 'text-yellow-400' :
+    isHigh               ? 'text-green-400'  :
+    game.confidence === 'MEDIUM' ? 'text-blue-400'   :
+    'text-slate-500';
 
   return (
-    <div className="card hover:border-slate-700 transition-colors">
+    <div className={`${cardClass} transition-colors`}>
+
+      {/* LOCK banner */}
+      {isLock && (
+        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+          <span className="text-yellow-400 text-xs font-bold tracking-wide">★ LOCK</span>
+          <span className="text-yellow-200 text-xs font-semibold">{game.pickLabel}</span>
+          <span className="ml-auto text-yellow-600 text-xs">{pct(Math.max(game.homeWinProbability, game.awayWinProbability))} win prob</span>
+        </div>
+      )}
+
+      {/* Matchup header */}
       <div className="flex items-center justify-between gap-3 mb-3">
         <div className="flex-1">
-          <div className={`font-bold text-sm ${leanAway ? 'text-white' : 'text-slate-400'}`}>
+          <div className={`font-bold text-sm ${pickAway ? 'text-white' : 'text-slate-400'}`}>
             {game.awayTeam.abbreviation || game.awayTeam.name}
-            {leanAway && <span className="ml-1.5 text-xs text-green-400">◀ lean</span>}
+            {pickAway && <span className="ml-1.5 text-xs text-green-400">◀ pick</span>}
           </div>
           <div className="text-xs text-slate-500 mt-0.5">
-            {game.awayStartingPitcher
-              ? `${game.awayStartingPitcher.fullName} (${game.awayStartingPitcher.throwHand}HP)`
-              : 'TBD'}
+            {game.awayStartingPitcher ? game.awayStartingPitcher.fullName : 'TBD'}
           </div>
           {game.awayStartingPitcher?.seasonStats && (
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-slate-600">
               {game.awayStartingPitcher.seasonStats.era.toFixed(2)} ERA
+              · {game.awayStartingPitcher.seasonStats.kPer9.toFixed(1)} K/9
             </div>
           )}
         </div>
@@ -262,23 +280,23 @@ function GamePickCard({ game }: { game: GamePrediction }) {
         </div>
 
         <div className="flex-1 text-right">
-          <div className={`font-bold text-sm ${leanHome ? 'text-white' : 'text-slate-400'}`}>
-            {leanHome && <span className="mr-1.5 text-xs text-green-400">lean ▶</span>}
+          <div className={`font-bold text-sm ${pickHome ? 'text-white' : 'text-slate-400'}`}>
+            {pickHome && <span className="mr-1.5 text-xs text-green-400">pick ▶</span>}
             {game.homeTeam.abbreviation || game.homeTeam.name}
           </div>
           <div className="text-xs text-slate-500 mt-0.5">
-            {game.homeStartingPitcher
-              ? `${game.homeStartingPitcher.fullName} (${game.homeStartingPitcher.throwHand}HP)`
-              : 'TBD'}
+            {game.homeStartingPitcher ? game.homeStartingPitcher.fullName : 'TBD'}
           </div>
           {game.homeStartingPitcher?.seasonStats && (
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-slate-600">
               {game.homeStartingPitcher.seasonStats.era.toFixed(2)} ERA
+              · {game.homeStartingPitcher.seasonStats.kPer9.toFixed(1)} K/9
             </div>
           )}
         </div>
       </div>
 
+      {/* Win probability bar */}
       <div className="flex h-2 rounded-full overflow-hidden mb-2 bg-slate-800">
         <div className="bg-blue-600 transition-all" style={{ width: `${game.awayWinProbability * 100}%` }} />
         <div className="bg-red-600 transition-all" style={{ width: `${game.homeWinProbability * 100}%` }} />
@@ -288,11 +306,15 @@ function GamePickCard({ game }: { game: GamePrediction }) {
         <span>{pct(game.homeWinProbability)}</span>
       </div>
 
+      {/* Pick label + confidence */}
       <div className="flex items-center justify-between gap-2 mb-3">
-        <span className="font-medium text-sm text-white">{game.spreadLean}</span>
+        <span className={`font-semibold text-sm ${game.pickSide ? 'text-white' : 'text-slate-500'}`}>
+          {game.pickLabel}
+        </span>
         <span className={`text-xs font-bold ${confColor}`}>{game.confidence}</span>
       </div>
 
+      {/* Expected runs + venue */}
       <div className="flex gap-3 text-xs text-slate-500 mb-3">
         <span>xR: <span className="text-slate-300">{game.awayExpectedRuns.toFixed(1)}</span></span>
         <span>vs</span>
@@ -300,6 +322,7 @@ function GamePickCard({ game }: { game: GamePrediction }) {
         <span className="ml-auto">{game.venue.name}</span>
       </div>
 
+      {/* Key factors */}
       {game.keyFactors.length > 0 && (
         <ul className="space-y-1">
           {game.keyFactors.map((f, i) => (
@@ -1210,13 +1233,37 @@ export default function Home() {
             </div>
           )}
 
-          {gameData && gameData.games.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {gameData.games.map(game => (
-                <GamePickCard key={game.gamePk} game={game} />
-              ))}
-            </div>
-          )}
+          {gameData && gameData.games.length > 0 && (() => {
+            const bestBets = gameData.games.filter(g => g.confidence === 'LOCK' || g.confidence === 'HIGH');
+            const theRest  = gameData.games.filter(g => g.confidence !== 'LOCK' && g.confidence !== 'HIGH');
+            return (
+              <>
+                {bestBets.length > 0 && (
+                  <div className="mb-7">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-yellow-400 text-sm font-bold">★ Best Bets</span>
+                      <span className="text-slate-600 text-xs">{bestBets.length} game{bestBets.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {bestBets.map(game => <GamePickCard key={game.gamePk} game={game} />)}
+                    </div>
+                  </div>
+                )}
+                {theRest.length > 0 && (
+                  <div>
+                    {bestBets.length > 0 && (
+                      <div className="text-slate-600 text-xs font-medium mb-3 uppercase tracking-wide">
+                        All Other Games
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {theRest.map(game => <GamePickCard key={game.gamePk} game={game} />)}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
     </div>

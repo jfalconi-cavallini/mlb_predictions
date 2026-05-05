@@ -32,9 +32,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return scoreGame(game, parkFactors);
   });
 
-  // Sort: HIGH confidence first, then by win probability spread (most decisive first)
+  // Sort: LOCK first, then HIGH, MEDIUM, LOW; within tier by most decisive win prob
   gamePredictions.sort((a, b) => {
-    const confOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    const confOrder: Record<string, number> = { LOCK: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
     const confDiff = confOrder[a.confidence] - confOrder[b.confidence];
     if (confDiff !== 0) return confDiff;
     return Math.abs(b.homeWinProbability - 0.5) - Math.abs(a.homeWinProbability - 0.5);
