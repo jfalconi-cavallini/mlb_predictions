@@ -41,6 +41,13 @@ export function extractFeatures(
   const ss = hitter.seasonStats;
   const rs = hitter.recentStats;
   const ps = pitcher?.seasonStats;
+  const pr = pitcher?.recentStats;
+
+  // ── SMALL-SAMPLE REGRESSION ───────────────────────────────────────────────
+  // Blend stats-derived features toward 0.45 (league average) for players
+  // with few PAs. Reaches full weight at 150 PA.
+  const paWeight = ss ? Math.min(ss.paCount / 150, 1.0) : 0.0;
+  function regress(v: number): number { return v * paWeight + 0.45 * (1 - paWeight); }
 
   // ── HITTER CONTACT SKILL ─────────────────────────────────────────────────
   // Based on: AVG (40%), OBP (35%), K% inverted (25%)
@@ -48,19 +55,19 @@ export function extractFeatures(
   const avgNorm = ss ? clamp((ss.avg - 0.15) / 0.25, 0, 1) : 0.40;      // 0.15–0.40 range
   const obpNorm = ss ? clamp((ss.obp - 0.25) / 0.20, 0, 1) : 0.40;      // 0.25–0.45 range
   const kInv = ss ? clamp(1 - (ss.kPct / 0.35), 0, 1) : 0.50;           // invert K%
-  const hitterContactSkill = (avgNorm * 0.40) + (obpNorm * 0.35) + (kInv * 0.25);
+  const hitterContactSkill = regress((avgNorm * 0.40) + (obpNorm * 0.35) + (kInv * 0.25));
 
   // ── HITTER POWER SKILL ────────────────────────────────────────────────────
   // Based on: ISO (50%), SLG (30%), hardHit% (20% if available)
   const isoNorm = ss ? clamp((ss.iso - 0.05) / 0.25, 0, 1) : 0.30;      // 0.05–0.30 ISO range
   const slgNorm = ss ? clamp((ss.slg - 0.25) / 0.35, 0, 1) : 0.35;      // 0.25–0.60 SLG range
   const hardHitNorm = ss?.hardHitPct ? clamp((ss.hardHitPct - 0.25) / 0.35, 0, 1) : 0.35;
-  const hitterPowerSkill = (isoNorm * 0.50) + (slgNorm * 0.30) + (hardHitNorm * 0.20);
+  const hitterPowerSkill = regress((isoNorm * 0.50) + (slgNorm * 0.30) + (hardHitNorm * 0.20));
 
   // ── HITTER HR RATE ───────────────────────────────────────────────────────
   // Direct: HR per PA, normalized to 0–1 range
   // 0 HR/PA = 0, ~0.07 HR/PA = 1 (elite like Judge)
-  const hitterHRRate = ss ? clamp(ss.hrRate / 0.07, 0, 1) : 0.20;
+  const hitterHRRate = regress(ss ? clamp(ss.hrRate / 0.07, 0, 1) : 0.20);
 
   // ── HITTER RECENT FORM ────────────────────────────────────────────────────
   // 14-day stats, weighted: recent_slg (50%), recent_avg (50%)
@@ -91,16 +98,16 @@ export function extractFeatures(
   }
 
   // ── OBP SKILL ────────────────────────────────────────────────────────────
-  const hitterOBPSkill = ss ? clamp((ss.obp - 0.25) / 0.20, 0, 1) : 0.40;
+  const hitterOBPSkill = regress(ss ? clamp((ss.obp - 0.25) / 0.20, 0, 1) : 0.40);
 
   // ── RBI CONTEXT (proxy: OPS × power) ─────────────────────────────────────
-  const hitterRBIContext = ss
+  const hitterRBIContext = regress(ss
     ? clamp(((ss.ops - 0.60) / 0.40) * 0.60 + hitterPowerSkill * 0.40, 0, 1)
-    : 0.35;
+    : 0.35);
 
   // ── PITCHER VULNERABILITY (HR) ────────────────────────────────────────────
   // High = pitcher gives up more HRs. Based on: HR/9, ERA (proxy)
-  // If no pitcher data, use league-average vulnerability (0.50)
+  // Blends season stats (70%) with recent 14-day performance (30%) when available.
   let pitcherVulnerabilityHR = 0.50;
   if (ps) {
     const hrPer9Norm = clamp((ps.hrPer9 - 0.5) / 2.0, 0, 1);   // 0.5–2.5 HR/9 range
@@ -108,23 +115,43 @@ export function extractFeatures(
     const hardHitAllowed = ps.hardHitPctAllowed
       ? clamp((ps.hardHitPctAllowed - 0.25) / 0.25, 0, 1)
       : 0.50;
-    pitcherVulnerabilityHR = (hrPer9Norm * 0.50) + (eraProxy * 0.25) + (hardHitAllowed * 0.25);
+    let seasonVuln = (hrPer9Norm * 0.50) + (eraProxy * 0.25) + (hardHitAllowed * 0.25);
+    if (pr && pr.innings >= 8) {
+      const rHRNorm = clamp((pr.hrPer9 - 0.5) / 2.0, 0, 1);
+      const rEraNorm = clamp((pr.era - 2.0) / 4.0, 0, 1);
+      seasonVuln = seasonVuln * 0.70 + (rHRNorm * 0.60 + rEraNorm * 0.40) * 0.30;
+    }
+    pitcherVulnerabilityHR = seasonVuln;
   }
 
   // ── PITCHER VULNERABILITY (CONTACT) ──────────────────────────────────────
+  // Less Ks + higher WHIP = more contact. Recent form blended in.
   let pitcherVulnerabilityContact = 0.50;
   if (ps) {
     const whipNorm = clamp((ps.whip - 0.80) / 1.0, 0, 1);        // 0.8–1.8 WHIP
     const kInvPitcher = clamp(1 - (ps.kPer9 / 12.0), 0, 1);      // less Ks = more contact
-    pitcherVulnerabilityContact = (whipNorm * 0.60) + (kInvPitcher * 0.40);
+    let seasonVuln = (whipNorm * 0.60) + (kInvPitcher * 0.40);
+    if (pr && pr.innings >= 8) {
+      const rWhipNorm = clamp((pr.whip - 0.80) / 1.0, 0, 1);
+      const rEraNorm = clamp((pr.era - 2.0) / 4.0, 0, 1);
+      seasonVuln = seasonVuln * 0.70 + (rWhipNorm * 0.70 + rEraNorm * 0.30) * 0.30;
+    }
+    pitcherVulnerabilityContact = seasonVuln;
   }
 
   // ── PITCHER VULNERABILITY (RUNS) ──────────────────────────────────────────
+  // ERA + BB/9 (walks fuel runs). Recent form blended in.
   let pitcherVulnerabilityRuns = 0.50;
   if (ps) {
     const eraFull = clamp((ps.era - 2.0) / 4.5, 0, 1);
     const bbBoost = clamp((ps.bbPer9 - 2.0) / 4.0, 0, 1);         // walks fuel runs
-    pitcherVulnerabilityRuns = (eraFull * 0.60) + (bbBoost * 0.40);
+    let seasonVuln = (eraFull * 0.60) + (bbBoost * 0.40);
+    if (pr && pr.innings >= 8) {
+      const rEraNorm = clamp((pr.era - 2.0) / 4.5, 0, 1);
+      const rWhipNorm = clamp((pr.whip - 0.80) / 1.0, 0, 1);
+      seasonVuln = seasonVuln * 0.70 + (rEraNorm * 0.65 + rWhipNorm * 0.35) * 0.30;
+    }
+    pitcherVulnerabilityRuns = seasonVuln;
   }
 
   // ── PARK FACTORS ──────────────────────────────────────────────────────────
@@ -205,7 +232,9 @@ export function extractFeatures(
 
 export function scoreProbabilities(f: FeatureVector): PropProbabilities {
   // ── HIT PROBABILITY ───────────────────────────────────────────────────────
-  // Drivers: contact skill (strongest), recent form, platoon, pitcher contact vuln
+  // Probability of getting at least 1 hit in the game.
+  // Target calibration: typical MLB hitter in neutral spot → ~63%
+  //                     elite contact hitter in great spot → ~72%
   const hitRaw =
     (f.hitterContactSkill    * 2.2) +   // strongest signal
     (f.hitterRecentForm      * 0.8) +   // recent form matters but don't over-weight
@@ -213,11 +242,12 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.pitcherVulnerabilityContact * 1.0) + // how hittable is this pitcher?
     (f.parkHRFactor          * 0.3) +   // park affects balls in play
     (f.hitterOBPSkill        * 0.5);    // OBP hitters find ways on base
-  // Intercept calibrated so average (all 0.5 features) → ~0.26 hit prob
-  const hit = scoreToProbability(hitRaw, -2.8, 0.85);
+  // Calibrated from actual data: avg player raw ≈ 2.42 → 63%, elite raw ≈ 4.0 → 72%
+  const hit = scoreToProbability(hitRaw, -0.35, 0.256);
 
   // ── RUN PROBABILITY ───────────────────────────────────────────────────────
-  // Drivers: OBP skill (must get on), recent form, team run environment
+  // Probability of scoring at least 1 run.
+  // Target: typical player → ~30%, elite OBP in great spot → ~40%
   const runRaw =
     (f.hitterOBPSkill        * 2.0) +
     (f.hitterContactSkill    * 0.8) +
@@ -225,10 +255,12 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.pitcherVulnerabilityRuns * 0.9) +
     (f.parkRunsFactor        * 0.7) +
     (f.weatherRunsBoost      * 0.5);
-  const run = scoreToProbability(runRaw, -3.2, 0.80);
+  // Calibrated: avg player raw ≈ 2.31 → 30%, elite raw ≈ 4.04 → 40%
+  const run = scoreToProbability(runRaw, -5.62, 0.256);
 
   // ── RBI PROBABILITY ───────────────────────────────────────────────────────
-  // Drivers: power, RBI context, platoon, pitcher runs vuln
+  // Probability of recording at least 1 RBI.
+  // Target: typical player → ~22%, elite power in great spot → ~35%
   const rbiRaw =
     (f.hitterRBIContext      * 1.8) +
     (f.hitterPowerSkill      * 0.9) +
@@ -236,10 +268,12 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.pitcherVulnerabilityRuns * 0.9) +
     (f.hitterRecentForm      * 0.5) +
     (f.parkRunsFactor        * 0.4);
-  const rbi = scoreToProbability(rbiRaw, -3.1, 0.80);
+  // Calibrated: avg player raw ≈ 2.20 → 22%, elite raw ≈ 4.01 → 35%
+  const rbi = scoreToProbability(rbiRaw, -5.75, 0.355);
 
   // ── HR PROBABILITY ────────────────────────────────────────────────────────
-  // Drivers: HR rate (strongest), power skill, pitcher HR vuln, park, weather
+  // Probability of hitting at least 1 HR in the game.
+  // Target: avg MLB player → ~6%, elite power (Alvarez-tier) → ~30%
   const hrRaw =
     (f.hitterHRRate          * 3.0) +   // individual HR rate is the biggest predictor
     (f.hitterPowerSkill      * 1.5) +   // raw power
@@ -248,8 +282,8 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.weatherHRBoost        * 1.0) +   // wind/temp
     (f.hitterPlatoonEdge     * 0.6) +   // platoon matters less for raw power
     (f.hitterRecentForm      * 0.4);    // recent form matters less than HR rate
-  // Calibrated: average MLB hitter → ~0.05 HR prob (realistic for 1 game)
-  const hr = scoreToProbability(hrRaw, -4.5, 0.75);
+  // Calibrated: avg player raw ≈ 3.96 → 6%, Alvarez-tier raw ≈ 7.38 → 30%
+  const hr = scoreToProbability(hrRaw, -8.90, 0.557);
 
   return { hit, run, rbi, hr };
 }
@@ -327,11 +361,14 @@ export function generateExplanations(
 }
 
 function getConfidenceTier(prob: number, prop: PropType): ConfidenceTier {
+  // Thresholds calibrated to realistic per-game probabilities after recalibration.
+  // Hit: avg player ~63%. ELITE = genuinely above average in a great spot.
+  // HR:  avg player ~6%. ELITE = top power hitters in optimal conditions.
   const thresholds: Record<PropType, [number, number, number]> = {
-    hit: [0.38, 0.30, 0.22],   // ELITE, STRONG, VALUE
-    run: [0.30, 0.22, 0.15],
-    rbi: [0.28, 0.20, 0.13],
-    hr:  [0.12, 0.08, 0.05],
+    hit: [0.72, 0.68, 0.64],   // ELITE, STRONG, VALUE
+    run: [0.38, 0.33, 0.28],
+    rbi: [0.30, 0.25, 0.20],
+    hr:  [0.22, 0.14, 0.08],
   };
   const [elite, strong, value] = thresholds[prop];
   if (prob >= elite) return 'ELITE';

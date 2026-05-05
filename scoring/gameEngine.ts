@@ -4,13 +4,36 @@ const LEAGUE_ERA = 4.20;
 const LEAGUE_RUNS_PER_GAME = 4.5;
 const HOME_FIELD_BOOST = 1.04;
 
-// Estimate runs scored against a given pitcher using ERA + WHIP blend
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+// Estimate expected runs scored against a given pitcher.
+// Uses ERA + WHIP as base, then adjusts for K/9 (suppresses) and BB/9 (adds),
+// and blends in recent 14-day performance when a meaningful sample exists.
 function expectedRunsAgainst(pitcher: MLBPitcher | null): number {
   if (!pitcher?.seasonStats) return LEAGUE_RUNS_PER_GAME;
   const ss = pitcher.seasonStats;
+
   const eraFactor = ss.era / LEAGUE_ERA;
   const whipFactor = ss.whip / 1.30;
-  return LEAGUE_RUNS_PER_GAME * (eraFactor * 0.70 + whipFactor * 0.30);
+
+  // High K/9 → pitcher suppresses runs beyond what ERA shows (up to -10%)
+  const kAdjust = 1 - clamp((ss.kPer9 - 8.5) / 12, 0, 0.10);
+  // High BB/9 → pitcher allows more runners, more runs (up to +8%)
+  const bbAdjust = 1 + clamp((ss.bbPer9 - 3.0) / 6.0, 0, 0.08);
+
+  let expected = LEAGUE_RUNS_PER_GAME * (eraFactor * 0.60 + whipFactor * 0.25) * kAdjust * bbAdjust;
+
+  // Blend recent 14-day ERA at 20–25% weight when innings sample is meaningful
+  const pr = pitcher.recentStats;
+  if (pr && pr.innings >= 10) {
+    const recentWeight = ss.innings >= 40 ? 0.20 : 0.28;
+    const recentExpected = LEAGUE_RUNS_PER_GAME * (pr.era / LEAGUE_ERA);
+    expected = expected * (1 - recentWeight) + recentExpected * recentWeight;
+  }
+
+  return Math.max(0.5, expected);
 }
 
 function pythagoreanWinPct(runsFor: number, runsAgainst: number): number {
@@ -53,8 +76,9 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors): GamePredicti
   }
 
   const winProb = Math.max(homeWinProb, awayWinProb);
+  // In MLB, a 60%+ win probability is a significant edge given parity of the sport.
   const confidence: 'HIGH' | 'MEDIUM' | 'LOW' =
-    winProb >= 0.63 ? 'HIGH' : winProb >= 0.57 ? 'MEDIUM' : 'LOW';
+    winProb >= 0.62 ? 'HIGH' : winProb >= 0.56 ? 'MEDIUM' : 'LOW';
 
   const keyFactors: string[] = [];
   if (awayPitcher?.seasonStats) {
