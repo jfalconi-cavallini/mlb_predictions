@@ -228,31 +228,42 @@ function PredictionCard({
 
 // ─── GAME PICK CARD ───────────────────────────────────────────────────────────
 
-function GamePickCard({ game }: { game: GamePrediction }) {
-  const isLock = game.confidence === 'LOCK';
-  const isHigh = game.confidence === 'HIGH';
-  const pickHome = game.pickSide === 'home';
-  const pickAway = game.pickSide === 'away';
+function confBadgeColor(conf: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW'): string {
+  return conf === 'LOCK' ? 'text-yellow-400' :
+         conf === 'HIGH' ? 'text-green-400'  :
+         conf === 'MEDIUM' ? 'text-blue-400' :
+         'text-slate-500';
+}
 
-  const cardClass = isLock
+function GamePickCard({ game }: { game: GamePrediction }) {
+  const mlIsLock  = game.confidence === 'LOCK';
+  const ouIsLock  = game.totalConfidence === 'LOCK';
+  const anyLock   = mlIsLock || ouIsLock;
+  const pickHome  = game.pickSide === 'home';
+  const pickAway  = game.pickSide === 'away';
+
+  const cardClass = anyLock
     ? 'card border-yellow-500/50 ring-1 ring-yellow-500/15 hover:border-yellow-500/70'
     : 'card hover:border-slate-700';
-
-  const confColor =
-    isLock               ? 'text-yellow-400' :
-    isHigh               ? 'text-green-400'  :
-    game.confidence === 'MEDIUM' ? 'text-blue-400'   :
-    'text-slate-500';
 
   return (
     <div className={`${cardClass} transition-colors`}>
 
-      {/* LOCK banner */}
-      {isLock && (
-        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+      {/* LOCK banner — shows ML lock and/or O/U lock */}
+      {anyLock && (
+        <div className="flex flex-wrap items-center gap-2 mb-3 px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
           <span className="text-yellow-400 text-xs font-bold tracking-wide">★ LOCK</span>
-          <span className="text-yellow-200 text-xs font-semibold">{game.pickLabel}</span>
-          <span className="ml-auto text-yellow-600 text-xs">{pct(Math.max(game.homeWinProbability, game.awayWinProbability))} win prob</span>
+          {mlIsLock && (
+            <span className="text-yellow-200 text-xs font-semibold">{game.pickLabel}</span>
+          )}
+          {ouIsLock && (
+            <span className="text-yellow-200 text-xs font-semibold">{game.totalPickLabel}</span>
+          )}
+          {mlIsLock && (
+            <span className="ml-auto text-yellow-600 text-xs">
+              {pct(Math.max(game.homeWinProbability, game.awayWinProbability))} win prob
+            </span>
+          )}
         </div>
       )}
 
@@ -306,25 +317,43 @@ function GamePickCard({ game }: { game: GamePrediction }) {
         <span>{pct(game.homeWinProbability)}</span>
       </div>
 
-      {/* Pick label + confidence */}
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <span className={`font-semibold text-sm ${game.pickSide ? 'text-white' : 'text-slate-500'}`}>
-          {game.pickLabel}
+      {/* ML pick row */}
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-600 text-xs w-7">ML</span>
+          <span className={`font-semibold text-sm ${game.pickSide ? 'text-white' : 'text-slate-500'}`}>
+            {game.pickLabel}
+          </span>
+        </div>
+        <span className={`text-xs font-bold ${confBadgeColor(game.confidence)}`}>
+          {game.confidence}
         </span>
-        <span className={`text-xs font-bold ${confColor}`}>{game.confidence}</span>
       </div>
 
-      {/* Expected runs + venue */}
-      <div className="flex gap-3 text-xs text-slate-500 mb-3">
-        <span>xR: <span className="text-slate-300">{game.awayExpectedRuns.toFixed(1)}</span></span>
-        <span>vs</span>
-        <span>xR: <span className="text-slate-300">{game.homeExpectedRuns.toFixed(1)}</span></span>
-        <span className="ml-auto">{game.venue.name}</span>
+      {/* O/U pick row */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-600 text-xs w-7">O/U</span>
+          <span className={`font-semibold text-sm ${game.totalPick ? 'text-white' : 'text-slate-500'}`}>
+            {game.totalPickLabel || 'No pick'}
+          </span>
+          {game.totalPick && (
+            <span className="text-slate-500 text-xs">(xTotal: {game.projectedTotal.toFixed(1)})</span>
+          )}
+        </div>
+        {game.totalPick && (
+          <span className={`text-xs font-bold ${confBadgeColor(game.totalConfidence)}`}>
+            {game.totalConfidence}
+          </span>
+        )}
+        {!game.totalPick && (
+          <span className="text-slate-600 text-xs">xTotal: {game.projectedTotal.toFixed(1)}</span>
+        )}
       </div>
 
       {/* Key factors */}
       {game.keyFactors.length > 0 && (
-        <ul className="space-y-1">
+        <ul className="space-y-1 border-t border-slate-800 pt-2">
           {game.keyFactors.map((f, i) => (
             <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
               <span className="text-slate-600 mt-0.5">›</span>
@@ -1234,8 +1263,13 @@ export default function Home() {
           )}
 
           {gameData && gameData.games.length > 0 && (() => {
-            const bestBets = gameData.games.filter(g => g.confidence === 'LOCK' || g.confidence === 'HIGH');
-            const theRest  = gameData.games.filter(g => g.confidence !== 'LOCK' && g.confidence !== 'HIGH');
+            // Best Bets: ML LOCK/HIGH or any O/U LOCK
+            const bestBets = gameData.games.filter(g =>
+              g.confidence === 'LOCK' || g.confidence === 'HIGH' || g.totalConfidence === 'LOCK'
+            );
+            const theRest = gameData.games.filter(g =>
+              g.confidence !== 'LOCK' && g.confidence !== 'HIGH' && g.totalConfidence !== 'LOCK'
+            );
             return (
               <>
                 {bestBets.length > 0 && (

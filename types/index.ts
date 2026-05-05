@@ -277,11 +277,15 @@ export interface GamePrediction {
   awayWinProbability: number;
   homeExpectedRuns: number;
   awayExpectedRuns: number;
+  projectedTotal: number;                      // sum of expected runs — compare to your book's line
   spreadLean: string;
   spreadLeanSide: 'home' | 'away' | null;
-  confidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
-  pickLabel: string;           // e.g. "NYY ML", "HOU ML", "Pick'em" — for record tracking
+  confidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW'; // ML pick confidence
+  pickLabel: string;                           // e.g. "NYY ML", "NYY -1.5" — primary ML bet label
   pickSide: 'home' | 'away' | null;
+  totalPick: 'OVER' | 'UNDER' | null;         // O/U recommendation (independent of ML pick)
+  totalConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
+  totalPickLabel: string;                      // e.g. "UNDER 7.4", "OVER 10.1", ""
   venue: MLBGame['venue'];
   parkFactors: ParkFactors;
   gameTime: string;

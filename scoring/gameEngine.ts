@@ -88,90 +88,122 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors): GamePredicti
   // Home field advantage
   const homeExpectedRuns = rawHomeRuns * HOME_FIELD_BOOST;
   const awayExpectedRuns = rawAwayRuns;
+  const projectedTotal = homeExpectedRuns + awayExpectedRuns;
 
   const homeWinProb = pythagoreanWinPct(homeExpectedRuns, awayExpectedRuns);
   const awayWinProb = 1 - homeWinProb;
   const winProb = Math.max(homeWinProb, awayWinProb);
-
   const runDiff = homeExpectedRuns - awayExpectedRuns; // positive = home team favored
 
-  // ── PITCHER QUALITY DIFFERENTIAL ─────────────────────────────────────────
+  // ── PITCHER QUALITY ───────────────────────────────────────────────────────
   const homeQuality = pitcherQualityScore(homePitcher);
   const awayQuality = pitcherQualityScore(awayPitcher);
-  // Positive = home pitcher better; negative = away pitcher better
-  const qualityDiff = homeQuality - awayQuality;
+  const qualityDiff = homeQuality - awayQuality; // positive = home pitcher better
+  const avgQuality  = (homeQuality + awayQuality) / 2;
+  const bothKnown   = homePitcher?.seasonStats != null && awayPitcher?.seasonStats != null;
 
-  // ── SPREAD LEAN ───────────────────────────────────────────────────────────
-  // Only recommend -1.5 (run line) when run differential and win prob are both high
+  // ── ML PICK (moneyline / run line) ────────────────────────────────────────
+  // -1.5 is only recommended when the edge is genuinely extreme.
+  // Most picks should be ML — it wins at a higher rate for tracking purposes.
   let spreadLean = "Pick'em";
   let spreadLeanSide: 'home' | 'away' | null = null;
+  let pickLabel = 'Pass';
+  let pickSide: 'home' | 'away' | null = null;
 
-  if (runDiff > 0) {
+  if (runDiff >= 0.40) {
     spreadLeanSide = 'home';
-    if (runDiff > 1.2 && winProb >= 0.63) {
+    // -1.5 only when win prob is very high AND run diff is large
+    if (runDiff >= 1.5 && winProb >= 0.67) {
       spreadLean = `${game.homeTeam.abbreviation} -1.5`;
-    } else if (runDiff > 0.35) {
+    } else {
       spreadLean = `${game.homeTeam.abbreviation} ML`;
-    } else {
-      spreadLean = "Pick'em";
-      spreadLeanSide = null;
     }
-  } else if (runDiff < 0) {
+    pickLabel = spreadLean;
+    pickSide  = 'home';
+  } else if (runDiff <= -0.40) {
     spreadLeanSide = 'away';
-    if (runDiff < -1.2 && winProb >= 0.63) {
+    if (runDiff <= -1.5 && winProb >= 0.67) {
       spreadLean = `${game.awayTeam.abbreviation} -1.5`;
-    } else if (runDiff < -0.35) {
-      spreadLean = `${game.awayTeam.abbreviation} ML`;
     } else {
-      spreadLean = "Pick'em";
-      spreadLeanSide = null;
+      spreadLean = `${game.awayTeam.abbreviation} ML`;
     }
+    pickLabel = spreadLean;
+    pickSide  = 'away';
   }
 
-  // ── CONFIDENCE + LOCK DETECTION ──────────────────────────────────────────
-  // LOCK: strong win probability AND meaningful pitcher quality edge AND run differential
-  // This is intentionally rare — diluting LOCKs destroys their tracking value.
-  const bothPitchersKnown = homePitcher?.seasonStats != null && awayPitcher?.seasonStats != null;
-  const isLock =
-    bothPitchersKnown &&
+  // ── ML CONFIDENCE ────────────────────────────────────────────────────────
+  // LOCK: high win prob + meaningful run edge + confirmed pitcher quality gap.
+  // Intentionally rare — each LOCK added to the record must carry real weight.
+  const mlIsLock =
+    bothKnown &&
     winProb >= 0.62 &&
     Math.abs(runDiff) >= 0.90 &&
     Math.abs(qualityDiff) >= 0.18;
 
   const confidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW' =
-    isLock      ? 'LOCK'   :
+    mlIsLock        ? 'LOCK'   :
     winProb >= 0.60 ? 'HIGH'   :
     winProb >= 0.55 ? 'MEDIUM' :
     'LOW';
 
-  // ── PICK LABEL (for record tracking) ─────────────────────────────────────
-  // Expressed as the recommended moneyline or run-line bet, or "Pass".
-  let pickLabel = "Pass";
-  let pickSide: 'home' | 'away' | null = null;
-  if (spreadLeanSide) {
-    pickLabel = spreadLean;
-    pickSide = spreadLeanSide;
+  // ── OVER / UNDER PICK (independent of ML pick) ───────────────────────────
+  // The projected total already bakes in park factors and pitcher quality.
+  // We generate a signal when the projection deviates significantly from a
+  // typical MLB total (~9.0 runs). Pitcher quality confirms direction:
+  //   UNDER: low total driven by good pitching (not just a weird park fluke)
+  //   OVER : high total driven by bad pitching and/or extreme park
+  let totalPick: 'OVER' | 'UNDER' | null = null;
+  let totalConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+  let totalPickLabel = '';
+
+  // For UNDER: the dominant (best) pitcher drives the signal — one ace can suppress scoring
+  // For OVER:  the weakest pitcher drives the signal — need at least one bad arm
+  const maxQuality = Math.max(homeQuality, awayQuality);
+  const minQuality = Math.min(homeQuality, awayQuality);
+
+  if (projectedTotal <= 7.8) {
+    totalPick = 'UNDER';
+    totalPickLabel = `UNDER ${projectedTotal.toFixed(1)}`;
+    if (projectedTotal <= 6.8 && maxQuality >= 0.68) {
+      totalConfidence = 'LOCK'; // Very low total + at least one ace
+    } else if (projectedTotal <= 7.3 || maxQuality >= 0.62) {
+      totalConfidence = 'HIGH'; // Clear under with good pitching confirmation
+    } else {
+      totalConfidence = 'MEDIUM';
+    }
+  } else if (projectedTotal >= 9.8) {
+    totalPick = 'OVER';
+    totalPickLabel = `OVER ${projectedTotal.toFixed(1)}`;
+    if (projectedTotal >= 11.0 && minQuality <= 0.40) {
+      totalConfidence = 'LOCK'; // Extreme total + both pitchers are genuinely bad
+    } else if (projectedTotal >= 10.3 || minQuality <= 0.44) {
+      totalConfidence = 'HIGH';
+    } else {
+      totalConfidence = 'MEDIUM';
+    }
   }
+  // 7.8–9.8: no O/U pick — too close to a typical sportsbook line to have reliable edge
 
   // ── KEY FACTORS ───────────────────────────────────────────────────────────
   const keyFactors: string[] = [];
 
-  // Always lead with full pitcher stat lines
   keyFactors.push(`Away: ${pitcherLine(awayPitcher)}`);
   keyFactors.push(`Home: ${pitcherLine(homePitcher)}`);
 
-  // Pitcher quality edge call-out
-  if (bothPitchersKnown && Math.abs(qualityDiff) >= 0.18) {
+  if (bothKnown && Math.abs(qualityDiff) >= 0.18) {
     const edgeSide = qualityDiff > 0 ? game.homeTeam.abbreviation : game.awayTeam.abbreviation;
-    const edgeStrength = Math.abs(qualityDiff) >= 0.30 ? 'clear' : 'slight';
-    keyFactors.push(`${edgeStrength.charAt(0).toUpperCase() + edgeStrength.slice(1)} pitching edge: ${edgeSide}`);
+    const edgeStr  = Math.abs(qualityDiff) >= 0.30 ? 'Clear' : 'Slight';
+    keyFactors.push(`${edgeStr} pitching edge: ${edgeSide}`);
   }
 
-  // Park environment
   if (parkFactors.runsFactor > 1.08) {
     keyFactors.push(`Hitter-friendly park (×${parkFactors.runsFactor.toFixed(2)} runs)`);
   } else if (parkFactors.runsFactor < 0.93) {
     keyFactors.push(`Pitcher-friendly park (×${parkFactors.runsFactor.toFixed(2)} runs)`);
+  }
+
+  if (totalPick) {
+    keyFactors.push(`O/U signal: projected total ${projectedTotal.toFixed(1)} runs`);
   }
 
   return {
@@ -184,11 +216,15 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors): GamePredicti
     awayWinProbability: awayWinProb,
     homeExpectedRuns,
     awayExpectedRuns,
+    projectedTotal,
     spreadLean,
     spreadLeanSide,
     confidence,
     pickLabel,
     pickSide,
+    totalPick,
+    totalConfidence,
+    totalPickLabel,
     venue: game.venue,
     parkFactors,
     gameTime: game.gameTime,
