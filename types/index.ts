@@ -171,6 +171,7 @@ export interface WeatherConditions {
   windDirectionDeg: number;    // 0=N, 90=E, 180=S, 270=W
   windDirectionLabel: string;  // "out to CF", "in from CF", etc.
   humidity: number;
+  precipitationProbability: number; // 0–100 %
   isIndoor: boolean;
   dataSource: 'live' | 'forecast' | 'unavailable';
   fetchedAt: string;
@@ -288,6 +289,7 @@ export interface GamePrediction {
   totalPickLabel: string;                      // e.g. "UNDER 7.4", "OVER 10.1", ""
   venue: MLBGame['venue'];
   parkFactors: ParkFactors;
+  weather: WeatherConditions | null;
   gameTime: string;
   gameDate: string;
   keyFactors: string[];

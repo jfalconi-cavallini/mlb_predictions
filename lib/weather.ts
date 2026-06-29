@@ -56,6 +56,7 @@ interface OpenMeteoResponse {
     relative_humidity_2m: number[];
     wind_speed_10m: number[];
     wind_direction_10m: number[];
+    precipitation_probability: number[];
   };
 }
 
@@ -69,7 +70,7 @@ export async function fetchWeather(
   if (INDOOR_VENUE_IDS.has(venueId)) {
     return {
       gamePk, tempF: 72, windSpeedMph: 0, windDirectionDeg: 0,
-      windDirectionLabel: 'Indoor', humidity: 50,
+      windDirectionLabel: 'Indoor', humidity: 50, precipitationProbability: 0,
       isIndoor: true, dataSource: 'unavailable', fetchedAt,
     };
   }
@@ -81,7 +82,7 @@ export async function fetchWeather(
     const url =
       `https://api.open-meteo.com/v1/forecast` +
       `?latitude=${coords.lat}&longitude=${coords.lon}` +
-      `&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m` +
+      `&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation_probability` +
       `&temperature_unit=fahrenheit&wind_speed_unit=mph` +
       `&timezone=UTC&past_days=1&forecast_days=3`;
 
@@ -99,10 +100,11 @@ export async function fetchWeather(
       if (diff < closestDiff) { closestDiff = diff; closestIdx = i; }
     }
 
-    const tempF          = data.hourly.temperature_2m[closestIdx];
-    const humidity       = data.hourly.relative_humidity_2m[closestIdx];
-    const windSpeedMph   = data.hourly.wind_speed_10m[closestIdx];
-    const windDirectionDeg = data.hourly.wind_direction_10m[closestIdx];
+    const tempF                  = data.hourly.temperature_2m[closestIdx];
+    const humidity               = data.hourly.relative_humidity_2m[closestIdx];
+    const windSpeedMph           = data.hourly.wind_speed_10m[closestIdx];
+    const windDirectionDeg       = data.hourly.wind_direction_10m[closestIdx];
+    const precipitationProbability = data.hourly.precipitation_probability?.[closestIdx] ?? 0;
 
     return {
       gamePk,
@@ -111,6 +113,7 @@ export async function fetchWeather(
       windDirectionDeg,
       windDirectionLabel: windLabel(windDirectionDeg, windSpeedMph),
       humidity,
+      precipitationProbability,
       isIndoor: false,
       dataSource: 'forecast',
       fetchedAt,

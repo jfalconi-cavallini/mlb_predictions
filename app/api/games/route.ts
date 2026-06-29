@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchTodaysGames } from '../../../lib/mlbApi';
 import { getParkFactors } from '../../../lib/parkFactors';
+import { fetchWeather } from '../../../lib/weather';
 import { scoreGame } from '../../../scoring/gameEngine';
 import { GamePredictionAPIResponse } from '../../../types';
 
@@ -27,9 +28,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const season = date.slice(0, 4);
   const { games, warnings } = await fetchTodaysGames(date, season);
 
-  const gamePredictions = games.map(game => {
+  // Fetch weather for all games in parallel
+  const weatherResults = await Promise.all(
+    games.map(game => fetchWeather(game.gamePk, game.venue.id, game.gameDateTime))
+  );
+
+  const gamePredictions = games.map((game, i) => {
     const parkFactors = getParkFactors(game.venue.id, game.venue.name);
-    return scoreGame(game, parkFactors);
+    return scoreGame(game, parkFactors, weatherResults[i]);
   });
 
   // Sort: LOCK first, then HIGH, MEDIUM, LOW; within tier by most decisive win prob

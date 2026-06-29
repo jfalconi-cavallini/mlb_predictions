@@ -1,4 +1,4 @@
-import { MLBGame, MLBPitcher, ParkFactors, GamePrediction } from '../types';
+import { MLBGame, MLBPitcher, ParkFactors, GamePrediction, WeatherConditions } from '../types';
 
 const LEAGUE_ERA = 4.20;
 const LEAGUE_RUNS_PER_GAME = 4.5;
@@ -77,13 +77,48 @@ function pitcherLine(pitcher: MLBPitcher | null): string {
   return `${pitcher.fullName}: ${ss.era.toFixed(2)} ERA, ${ss.kPer9.toFixed(1)} K/9, ${ss.bbPer9.toFixed(1)} BB/9${trend}`;
 }
 
-export function scoreGame(game: MLBGame, parkFactors: ParkFactors): GamePrediction {
+// Returns a run-scoring multiplier driven by temperature and wind.
+// Applied equally to both teams → shifts the projected total without changing run differential.
+// Temperature: warm air is less dense, ball carries farther; cold air suppresses offense.
+// Wind: blowing out to CF inflates totals; blowing in from CF suppresses them.
+function weatherRunsMultiplier(weather: WeatherConditions | null): number {
+  if (!weather || weather.isIndoor) return 1.0;
+
+  let m = 1.0;
+
+  // Temperature adjustment
+  const t = weather.tempF;
+  if (t >= 90)      m *= 1.07;
+  else if (t >= 80) m *= 1.03;
+  else if (t >= 65) m *= 1.00;
+  else if (t >= 50) m *= 0.97;
+  else if (t >= 40) m *= 0.93;
+  else              m *= 0.87;
+
+  // Wind adjustment — intensity scaled 0–1, caps out at 20 mph
+  const mph = weather.windSpeedMph;
+  if (mph >= 5) {
+    const intensity = Math.min(mph / 20, 1.0);
+    const dir = weather.windDirectionLabel;
+    if (dir === 'out to CF') {
+      m *= 1 + 0.15 * intensity;   // up to +15% total runs at 20+ mph
+    } else if (dir === 'in from CF') {
+      m *= 1 - 0.15 * intensity;   // up to -15% total runs at 20+ mph
+    }
+    // Crosswinds: negligible net run effect — skip
+  }
+
+  return clamp(m, 0.75, 1.30);
+}
+
+export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: WeatherConditions | null = null): GamePrediction {
   const homePitcher = game.probableHomePitcher;
   const awayPitcher = game.probableAwayPitcher;
 
-  // Home team scores against the away pitcher; apply park runs factor
-  const rawHomeRuns = expectedRunsAgainst(awayPitcher) * parkFactors.runsFactor;
-  const rawAwayRuns = expectedRunsAgainst(homePitcher) * parkFactors.runsFactor;
+  // Home team scores against the away pitcher; apply park runs factor and weather
+  const wMult = weatherRunsMultiplier(weather);
+  const rawHomeRuns = expectedRunsAgainst(awayPitcher) * parkFactors.runsFactor * wMult;
+  const rawAwayRuns = expectedRunsAgainst(homePitcher) * parkFactors.runsFactor * wMult;
 
   // Home field advantage
   const homeExpectedRuns = rawHomeRuns * HOME_FIELD_BOOST;
@@ -206,6 +241,38 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors): GamePredicti
     keyFactors.push(`O/U signal: projected total ${projectedTotal.toFixed(1)} runs`);
   }
 
+  // ── WEATHER KEY FACTORS ───────────────────────────────────────────────────
+  if (weather && !weather.isIndoor) {
+    const mph = weather.windSpeedMph;
+    const dir = weather.windDirectionLabel;
+    const t   = weather.tempF;
+
+    if (mph >= 10) {
+      if (dir === 'out to CF') {
+        keyFactors.push(`Wind ${mph.toFixed(0)} mph blowing OUT to CF → offense boost`);
+      } else if (dir === 'in from CF') {
+        keyFactors.push(`Wind ${mph.toFixed(0)} mph blowing IN from CF → offense suppressed`);
+      } else {
+        keyFactors.push(`Wind ${mph.toFixed(0)} mph crosswind (${dir})`);
+      }
+    } else if (mph >= 5) {
+      keyFactors.push(`Mild wind ${mph.toFixed(0)} mph ${dir}`);
+    }
+
+    if (t <= 45) {
+      keyFactors.push(`Cold game-time temp ${t.toFixed(0)}°F → ball dies, favor UNDER`);
+    } else if (t >= 85) {
+      keyFactors.push(`Hot game-time temp ${t.toFixed(0)}°F → ball carries, favor OVER`);
+    }
+
+    const precip = weather.precipitationProbability;
+    if (precip >= 70) {
+      keyFactors.push(`HIGH rain risk (${precip}%) — game-time uncertainty`);
+    } else if (precip >= 40) {
+      keyFactors.push(`Moderate rain risk (${precip}%) — monitor conditions`);
+    }
+  }
+
   return {
     gamePk: game.gamePk,
     homeTeam: game.homeTeam,
@@ -227,6 +294,7 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors): GamePredicti
     totalPickLabel,
     venue: game.venue,
     parkFactors,
+    weather,
     gameTime: game.gameTime,
     gameDate: game.gameDate,
     keyFactors,
