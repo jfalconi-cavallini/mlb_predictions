@@ -147,22 +147,14 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
 
   if (runDiff >= 0.40) {
     spreadLeanSide = 'home';
-    // -1.5 only at a genuinely dominant edge: run diff 2.0+ AND win prob 73%+.
-    // Below that threshold the team wins by exactly 1 run too often — ML hits, -1.5 misses.
-    if (runDiff >= 2.0 && winProb >= 0.73) {
-      spreadLean = `${game.homeTeam.abbreviation} -1.5`;
-    } else {
-      spreadLean = `${game.homeTeam.abbreviation} ML`;
-    }
+    // Always recommend ML — it cashes when the team wins by 1 run too, giving a
+    // consistently higher hit rate than -1.5 regardless of how large the edge is.
+    spreadLean = `${game.homeTeam.abbreviation} ML`;
     pickLabel = spreadLean;
     pickSide  = 'home';
   } else if (runDiff <= -0.40) {
     spreadLeanSide = 'away';
-    if (runDiff <= -2.0 && winProb >= 0.73) {
-      spreadLean = `${game.awayTeam.abbreviation} -1.5`;
-    } else {
-      spreadLean = `${game.awayTeam.abbreviation} ML`;
-    }
+    spreadLean = `${game.awayTeam.abbreviation} ML`;
     pickLabel = spreadLean;
     pickSide  = 'away';
   }
