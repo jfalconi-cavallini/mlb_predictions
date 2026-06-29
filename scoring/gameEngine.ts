@@ -111,7 +111,7 @@ function weatherRunsMultiplier(weather: WeatherConditions | null): number {
   return clamp(m, 0.75, 1.30);
 }
 
-export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: WeatherConditions | null = null): GamePrediction {
+export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: WeatherConditions | null = null, ouLine: number | null = null): GamePrediction {
   const homePitcher = game.probableHomePitcher;
   const awayPitcher = game.probableAwayPitcher;
 
@@ -175,42 +175,67 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
     'LOW';
 
   // ── OVER / UNDER PICK (independent of ML pick) ───────────────────────────
-  // The projected total already bakes in park factors and pitcher quality.
-  // We generate a signal when the projection deviates significantly from a
-  // typical MLB total (~9.0 runs). Pitcher quality confirms direction:
-  //   UNDER: low total driven by good pitching (not just a weird park fluke)
-  //   OVER : high total driven by bad pitching and/or extreme park
   let totalPick: 'OVER' | 'UNDER' | null = null;
   let totalConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
   let totalPickLabel = '';
 
-  // For UNDER: the dominant (best) pitcher drives the signal — one ace can suppress scoring
-  // For OVER:  the weakest pitcher drives the signal — need at least one bad arm
   const maxQuality = Math.max(homeQuality, awayQuality);
   const minQuality = Math.min(homeQuality, awayQuality);
 
-  if (projectedTotal <= 7.8) {
-    totalPick = 'UNDER';
-    totalPickLabel = `UNDER ${projectedTotal.toFixed(1)}`;
-    if (projectedTotal <= 6.8 && maxQuality >= 0.68) {
-      totalConfidence = 'LOCK'; // Very low total + at least one ace
-    } else if (projectedTotal <= 7.3 || maxQuality >= 0.62) {
-      totalConfidence = 'HIGH'; // Clear under with good pitching confirmation
-    } else {
-      totalConfidence = 'MEDIUM';
+  if (ouLine !== null) {
+    // Real sportsbook line available: pick based on how much our projection diverges.
+    // Each run of gap ≥ 1.0 is meaningful; pitcher quality confirms the direction.
+    const gap = ouLine - projectedTotal; // positive → our proj is lower → UNDER edge
+
+    if (gap >= 1.0) {
+      totalPick = 'UNDER';
+      totalPickLabel = `UNDER ${ouLine.toFixed(1)}`;
+      if (gap >= 2.5 && maxQuality >= 0.62) {
+        totalConfidence = 'LOCK';
+      } else if (gap >= 1.5 || maxQuality >= 0.62) {
+        totalConfidence = 'HIGH';
+      } else {
+        totalConfidence = 'MEDIUM';
+      }
+    } else if (gap <= -1.0) {
+      totalPick = 'OVER';
+      totalPickLabel = `OVER ${ouLine.toFixed(1)}`;
+      const absGap = Math.abs(gap);
+      if (absGap >= 2.5 && minQuality <= 0.44) {
+        totalConfidence = 'LOCK';
+      } else if (absGap >= 1.5 || minQuality <= 0.44) {
+        totalConfidence = 'HIGH';
+      } else {
+        totalConfidence = 'MEDIUM';
+      }
     }
-  } else if (projectedTotal >= 9.8) {
-    totalPick = 'OVER';
-    totalPickLabel = `OVER ${projectedTotal.toFixed(1)}`;
-    if (projectedTotal >= 11.0 && minQuality <= 0.40) {
-      totalConfidence = 'LOCK'; // Extreme total + both pitchers are genuinely bad
-    } else if (projectedTotal >= 10.3 || minQuality <= 0.44) {
-      totalConfidence = 'HIGH';
-    } else {
-      totalConfidence = 'MEDIUM';
+  } else {
+    // Fallback when no real line: compare projection to a neutral 9.0 baseline.
+    // UNDER: low total driven by good pitching
+    // OVER : high total driven by bad pitching and/or extreme park
+    if (projectedTotal <= 7.8) {
+      totalPick = 'UNDER';
+      totalPickLabel = `UNDER (proj ${projectedTotal.toFixed(1)})`;
+      if (projectedTotal <= 6.8 && maxQuality >= 0.68) {
+        totalConfidence = 'LOCK';
+      } else if (projectedTotal <= 7.3 || maxQuality >= 0.62) {
+        totalConfidence = 'HIGH';
+      } else {
+        totalConfidence = 'MEDIUM';
+      }
+    } else if (projectedTotal >= 9.8) {
+      totalPick = 'OVER';
+      totalPickLabel = `OVER (proj ${projectedTotal.toFixed(1)})`;
+      if (projectedTotal >= 11.0 && minQuality <= 0.40) {
+        totalConfidence = 'LOCK';
+      } else if (projectedTotal >= 10.3 || minQuality <= 0.44) {
+        totalConfidence = 'HIGH';
+      } else {
+        totalConfidence = 'MEDIUM';
+      }
     }
+    // Near 9.0: no pick — too close to neutral to have a reliable edge without a real line
   }
-  // 7.8–9.8: no O/U pick — too close to a typical sportsbook line to have reliable edge
 
   // ── KEY FACTORS ───────────────────────────────────────────────────────────
   const keyFactors: string[] = [];
@@ -285,6 +310,7 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
     totalPick,
     totalConfidence,
     totalPickLabel,
+    ouLine,
     venue: game.venue,
     parkFactors,
     weather,

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchTodaysGames } from '../../../lib/mlbApi';
 import { getParkFactors } from '../../../lib/parkFactors';
 import { fetchWeather } from '../../../lib/weather';
+import { fetchMLBOdds } from '../../../lib/odds';
 import { scoreGame } from '../../../scoring/gameEngine';
 import { GamePredictionAPIResponse } from '../../../types';
 
@@ -28,14 +29,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const season = date.slice(0, 4);
   const { games, warnings } = await fetchTodaysGames(date, season);
 
-  // Fetch weather for all games in parallel
-  const weatherResults = await Promise.all(
-    games.map(game => fetchWeather(game.gamePk, game.venue.id, game.gameDateTime))
-  );
+  // Fetch weather and odds in parallel
+  const [weatherResults, lookupOULine] = await Promise.all([
+    Promise.all(games.map(game => fetchWeather(game.gamePk, game.venue.id, game.gameDateTime))),
+    fetchMLBOdds(),
+  ]);
 
   const gamePredictions = games.map((game, i) => {
     const parkFactors = getParkFactors(game.venue.id, game.venue.name);
-    return scoreGame(game, parkFactors, weatherResults[i]);
+    const ouLine      = lookupOULine(game.awayTeam.name, game.homeTeam.name);
+    return scoreGame(game, parkFactors, weatherResults[i], ouLine);
   });
 
   // Sort: LOCK first, then HIGH, MEDIUM, LOW; within tier by most decisive win prob

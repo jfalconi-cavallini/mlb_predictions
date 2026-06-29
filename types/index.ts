@@ -286,7 +286,8 @@ export interface GamePrediction {
   pickSide: 'home' | 'away' | null;
   totalPick: 'OVER' | 'UNDER' | null;         // O/U recommendation (independent of ML pick)
   totalConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
-  totalPickLabel: string;                      // e.g. "UNDER 7.4", "OVER 10.1", ""
+  totalPickLabel: string;                      // e.g. "UNDER 8.5", "OVER 9.5", ""
+  ouLine: number | null;                       // real sportsbook O/U line (null if unavailable)
   venue: MLBGame['venue'];
   parkFactors: ParkFactors;
   weather: WeatherConditions | null;

@@ -243,9 +243,10 @@ function GamePickCard({ game }: { game: GamePrediction }) {
   const pickAway  = game.pickSide === 'away';
 
   const mlPct = Math.max(game.homeWinProbability, game.awayWinProbability);
-  // O/U hit-rate estimate: each run of deviation from neutral 9.0 ≈ +10 pp above 50%, capped at 80%.
+  // O/U hit-rate estimate: deviation of our projection from the real line (or neutral 9.0) × 10 pp.
+  const ouBaseline = game.ouLine ?? 9.0;
   const ouPct = game.totalPick
-    ? Math.min(0.50 + Math.abs(game.projectedTotal - 9.0) * 0.10, 0.80)
+    ? Math.min(0.50 + Math.abs(game.projectedTotal - ouBaseline) * 0.10, 0.80)
     : null;
 
   const cardClass = anyLock
@@ -319,6 +320,17 @@ function GamePickCard({ game }: { game: GamePrediction }) {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Predicted score */}
+      <div className="flex items-center justify-between text-xs mb-2 px-0.5">
+        <span className={`font-mono font-bold text-sm ${pickAway ? 'text-white' : 'text-slate-400'}`}>
+          {game.awayExpectedRuns.toFixed(1)}
+        </span>
+        <span className="text-slate-600 text-xs">predicted score</span>
+        <span className={`font-mono font-bold text-sm ${pickHome ? 'text-white' : 'text-slate-400'}`}>
+          {game.homeExpectedRuns.toFixed(1)}
+        </span>
       </div>
 
       {/* Win probability bar */}
