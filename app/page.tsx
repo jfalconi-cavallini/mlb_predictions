@@ -242,27 +242,41 @@ function GamePickCard({ game }: { game: GamePrediction }) {
   const pickHome  = game.pickSide === 'home';
   const pickAway  = game.pickSide === 'away';
 
+  const mlPct = Math.max(game.homeWinProbability, game.awayWinProbability);
+  // O/U hit-rate estimate: each run of deviation from neutral 9.0 ≈ +10 pp above 50%, capped at 80%.
+  const ouPct = game.totalPick
+    ? Math.min(0.50 + Math.abs(game.projectedTotal - 9.0) * 0.10, 0.80)
+    : null;
+
   const cardClass = anyLock
     ? 'card border-yellow-500/50 ring-1 ring-yellow-500/15 hover:border-yellow-500/70'
     : 'card hover:border-slate-700';
 
+  const w = game.weather;
+  const windColor =
+    w?.windDirectionLabel === 'out to CF'   ? 'text-green-400' :
+    w?.windDirectionLabel === 'in from CF'  ? 'text-red-400'   :
+    'text-slate-400';
+  const tempColor =
+    w && w.tempF >= 85 ? 'text-orange-400' :
+    w && w.tempF <= 45 ? 'text-blue-400'   :
+    'text-slate-400';
+  const rainColor =
+    w && w.precipitationProbability >= 70 ? 'text-red-400'    :
+    w && w.precipitationProbability >= 40 ? 'text-yellow-400' :
+    'text-slate-500';
+
   return (
     <div className={`${cardClass} transition-colors`}>
 
-      {/* LOCK banner — shows ML lock and/or O/U lock */}
+      {/* LOCK banner */}
       {anyLock && (
         <div className="flex flex-wrap items-center gap-2 mb-3 px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
           <span className="text-yellow-400 text-xs font-bold tracking-wide">★ LOCK</span>
+          {mlIsLock && <span className="text-yellow-200 text-xs font-semibold">{game.pickLabel}</span>}
+          {ouIsLock && <span className="text-yellow-200 text-xs font-semibold">{game.totalPickLabel}</span>}
           {mlIsLock && (
-            <span className="text-yellow-200 text-xs font-semibold">{game.pickLabel}</span>
-          )}
-          {ouIsLock && (
-            <span className="text-yellow-200 text-xs font-semibold">{game.totalPickLabel}</span>
-          )}
-          {mlIsLock && (
-            <span className="ml-auto text-yellow-600 text-xs">
-              {pct(Math.max(game.homeWinProbability, game.awayWinProbability))} win prob
-            </span>
+            <span className="ml-auto text-yellow-600 text-xs">{pct(mlPct)} win prob</span>
           )}
         </div>
       )}
@@ -317,7 +331,7 @@ function GamePickCard({ game }: { game: GamePrediction }) {
         <span>{pct(game.homeWinProbability)}</span>
       </div>
 
-      {/* ML pick row */}
+      {/* ML pick row — shows model win probability as hit-rate estimate */}
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5">
           <span className="text-slate-600 text-xs w-7">ML</span>
@@ -325,29 +339,54 @@ function GamePickCard({ game }: { game: GamePrediction }) {
             {game.pickLabel}
           </span>
         </div>
-        <span className={`text-xs font-bold ${confBadgeColor(game.confidence)}`}>
-          {game.confidence}
-        </span>
+        <div className="flex items-center gap-2">
+          {game.pickSide && (
+            <span className="text-slate-300 text-xs font-mono font-bold">{pct(mlPct)}</span>
+          )}
+          <span className={`text-xs font-bold ${confBadgeColor(game.confidence)}`}>
+            {game.confidence}
+          </span>
+        </div>
       </div>
 
-      {/* O/U pick row */}
+      {/* O/U pick row — shows estimated O/U hit rate from projected total deviation */}
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-1.5">
           <span className="text-slate-600 text-xs w-7">O/U</span>
           <span className={`font-semibold text-sm ${game.totalPick ? 'text-white' : 'text-slate-500'}`}>
             {game.totalPickLabel || 'No pick'}
           </span>
-          {game.totalPick && (
-            <span className="text-slate-500 text-xs">(xTotal: {game.projectedTotal.toFixed(1)})</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {ouPct !== null && (
+            <span className="text-slate-300 text-xs font-mono font-bold">{pct(ouPct)}</span>
+          )}
+          {game.totalPick ? (
+            <span className={`text-xs font-bold ${confBadgeColor(game.totalConfidence)}`}>
+              {game.totalConfidence}
+            </span>
+          ) : (
+            <span className="text-slate-600 text-xs">xTotal: {game.projectedTotal.toFixed(1)}</span>
           )}
         </div>
-        {game.totalPick && (
-          <span className={`text-xs font-bold ${confBadgeColor(game.totalConfidence)}`}>
-            {game.totalConfidence}
-          </span>
-        )}
-        {!game.totalPick && (
-          <span className="text-slate-600 text-xs">xTotal: {game.projectedTotal.toFixed(1)}</span>
+      </div>
+
+      {/* Weather row */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs border-t border-slate-800/60 pt-2 mb-2">
+        {!w && <span className="text-slate-700">Weather unavailable</span>}
+        {w?.isIndoor && <span className="text-slate-500">Dome · controlled conditions</span>}
+        {w && !w.isIndoor && (
+          <>
+            <span className={tempColor}>{w.tempF.toFixed(0)}°F</span>
+            {w.windSpeedMph >= 5 ? (
+              <span className={windColor}>{w.windSpeedMph.toFixed(0)}mph {w.windDirectionLabel}</span>
+            ) : (
+              <span className="text-slate-600">Calm wind</span>
+            )}
+            {w.precipitationProbability >= 20 && (
+              <span className={rainColor}>Rain {w.precipitationProbability}%</span>
+            )}
+          </>
         )}
       </div>
 

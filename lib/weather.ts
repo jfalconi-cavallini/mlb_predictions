@@ -20,7 +20,8 @@ const VENUE_COORDS: Record<number, { lat: number; lon: number }> = {
   3312: { lat: 44.9817,  lon: -93.2781  }, // Target Field
   1:    { lat: 33.8003,  lon: -117.8827 }, // Angel Stadium
   2392: { lat: 29.7573,  lon: -95.3555  }, // Minute Maid Park
-  10:   { lat: 38.5716,  lon: -121.5066 }, // Sutter Health Park (Sacramento)
+  10:   { lat: 38.5716,  lon: -121.5066 }, // Sutter Health Park (Sacramento) — legacy ID
+  2529: { lat: 38.5716,  lon: -121.5066 }, // Sutter Health Park (Sacramento) — current ID
   680:  { lat: 47.5914,  lon: -122.3323 }, // T-Mobile Park
   5325: { lat: 32.7513,  lon: -97.0832  }, // Globe Life Field
   4705: { lat: 33.8907,  lon: -84.4677  }, // Truist Park
