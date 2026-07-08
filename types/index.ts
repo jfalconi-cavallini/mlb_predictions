@@ -288,6 +288,10 @@ export interface GamePrediction {
   totalConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
   totalPickLabel: string;                      // e.g. "UNDER 8.5", "OVER 9.5", ""
   ouLine: number | null;                       // real sportsbook O/U line (null if unavailable)
+  nrfiProbability: number;                     // probability of no run in first inning (both teams)
+  nrfiPick: 'NRFI' | 'YRFI' | null;
+  nrfiConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
+  nrfiPickLabel: string;                       // e.g. "NRFI", "YRFI"
   venue: MLBGame['venue'];
   parkFactors: ParkFactors;
   weather: WeatherConditions | null;

@@ -236,9 +236,10 @@ function confBadgeColor(conf: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW'): string {
 }
 
 function GamePickCard({ game }: { game: GamePrediction }) {
-  const mlIsLock  = game.confidence === 'LOCK';
-  const ouIsLock  = game.totalConfidence === 'LOCK';
-  const anyLock   = mlIsLock || ouIsLock;
+  const mlIsLock    = game.confidence === 'LOCK';
+  const ouIsLock    = game.totalConfidence === 'LOCK';
+  const nrfiIsLock  = game.nrfiConfidence === 'LOCK' && game.nrfiPick !== null;
+  const anyLock     = mlIsLock || ouIsLock || nrfiIsLock;
   const pickHome  = game.pickSide === 'home';
   const pickAway  = game.pickSide === 'away';
 
@@ -276,8 +277,12 @@ function GamePickCard({ game }: { game: GamePrediction }) {
           <span className="text-yellow-400 text-xs font-bold tracking-wide">★ LOCK</span>
           {mlIsLock && <span className="text-yellow-200 text-xs font-semibold">{game.pickLabel}</span>}
           {ouIsLock && <span className="text-yellow-200 text-xs font-semibold">{game.totalPickLabel}</span>}
+          {nrfiIsLock && <span className="text-yellow-200 text-xs font-semibold">{game.nrfiPickLabel}</span>}
           {mlIsLock && (
             <span className="ml-auto text-yellow-600 text-xs">{pct(mlPct)} win prob</span>
+          )}
+          {nrfiIsLock && !mlIsLock && (
+            <span className="ml-auto text-yellow-600 text-xs">{pct(game.nrfiProbability)} NRFI</span>
           )}
         </div>
       )}
@@ -362,7 +367,7 @@ function GamePickCard({ game }: { game: GamePrediction }) {
       </div>
 
       {/* O/U pick row — shows estimated O/U hit rate from projected total deviation */}
-      <div className="flex items-center justify-between gap-2 mb-3">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5">
           <span className="text-slate-600 text-xs w-7">O/U</span>
           <span className={`font-semibold text-sm ${game.totalPick ? 'text-white' : 'text-slate-500'}`}>
@@ -379,6 +384,24 @@ function GamePickCard({ game }: { game: GamePrediction }) {
             </span>
           ) : (
             <span className="text-slate-600 text-xs">xTotal: {game.projectedTotal.toFixed(1)}</span>
+          )}
+        </div>
+      </div>
+
+      {/* NRFI/YRFI row */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-600 text-xs w-7">1st</span>
+          <span className={`font-semibold text-sm ${game.nrfiPick ? 'text-white' : 'text-slate-500'}`}>
+            {game.nrfiPickLabel || 'No pick'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-300 text-xs font-mono font-bold">{pct(game.nrfiProbability)} NRFI</span>
+          {game.nrfiPick && (
+            <span className={`text-xs font-bold ${confBadgeColor(game.nrfiConfidence)}`}>
+              {game.nrfiConfidence}
+            </span>
           )}
         </div>
       </div>
@@ -713,6 +736,122 @@ function TotalBasesCard({
   );
 }
 
+// ─── NRFI CARD ────────────────────────────────────────────────────────────────
+
+function NRFICard({ game }: { game: GamePrediction }) {
+  const isNRFI = game.nrfiPick === 'NRFI';
+  const isYRFI = game.nrfiPick === 'YRFI';
+  const isLock = game.nrfiConfidence === 'LOCK' && game.nrfiPick !== null;
+
+  const cardClass = isLock
+    ? 'card border-emerald-500/50 ring-1 ring-emerald-500/15 hover:border-emerald-500/70'
+    : 'card hover:border-slate-700';
+
+  const pickColor = isNRFI ? 'text-emerald-400' : isYRFI ? 'text-orange-400' : 'text-slate-500';
+  const barColor  = isNRFI ? 'bg-emerald-500' : isYRFI ? 'bg-orange-500' : 'bg-slate-600';
+
+  const w = game.weather;
+  const windColor =
+    w?.windDirectionLabel === 'out to CF'  ? 'text-green-400' :
+    w?.windDirectionLabel === 'in from CF' ? 'text-red-400'   :
+    'text-slate-400';
+  const tempColor =
+    w && w.tempF >= 85 ? 'text-orange-400' :
+    w && w.tempF <= 45 ? 'text-blue-400'   :
+    'text-slate-400';
+
+  return (
+    <div className={`${cardClass} transition-colors`}>
+      {isLock && (
+        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
+          <span className="text-emerald-400 text-xs font-bold tracking-wide">★ LOCK</span>
+          <span className={`text-xs font-bold ${pickColor}`}>{game.nrfiPickLabel}</span>
+          <span className="ml-auto text-emerald-600 text-xs">{pct(game.nrfiProbability)} NRFI prob</span>
+        </div>
+      )}
+
+      {/* Matchup */}
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div>
+          <div className="font-bold text-white text-sm">{game.awayTeam.abbreviation} @ {game.homeTeam.abbreviation}</div>
+          <div className="text-slate-500 text-xs">{game.gameTime} ET · {game.venue.name}</div>
+        </div>
+        <div className="text-right">
+          <div className={`font-mono text-2xl font-bold ${pickColor}`}>{pct(game.nrfiProbability)}</div>
+          <div className="text-slate-500 text-xs">NRFI prob</div>
+        </div>
+      </div>
+
+      {/* NRFI probability bar */}
+      <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${barColor}`}
+          style={{ width: `${game.nrfiProbability * 100}%` }}
+        />
+      </div>
+
+      {/* Pick badge */}
+      <div className="flex items-center justify-between mb-3">
+        <span className={`font-bold text-base ${pickColor}`}>
+          {game.nrfiPick ?? 'No pick'}
+        </span>
+        {game.nrfiPick && (
+          <span className={`text-xs font-bold ${confBadgeColor(game.nrfiConfidence)}`}>
+            {game.nrfiConfidence}
+          </span>
+        )}
+        {!game.nrfiPick && (
+          <span className="text-slate-600 text-xs">Lean: {game.nrfiProbability >= 0.70 ? 'slight NRFI' : game.nrfiProbability <= 0.67 ? 'slight YRFI' : 'neutral'}</span>
+        )}
+      </div>
+
+      {/* Pitchers */}
+      <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+        <div className="p-2 bg-slate-900 rounded-lg">
+          <div className="text-slate-500 mb-0.5">{game.awayTeam.abbreviation} starter</div>
+          <div className="text-white font-medium">{game.awayStartingPitcher?.fullName ?? 'TBD'}</div>
+          {game.awayStartingPitcher?.seasonStats && (
+            <div className="text-slate-400 font-mono mt-0.5">
+              {game.awayStartingPitcher.seasonStats.era.toFixed(2)} ERA · {game.awayStartingPitcher.seasonStats.whip.toFixed(2)} WHIP
+            </div>
+          )}
+        </div>
+        <div className="p-2 bg-slate-900 rounded-lg">
+          <div className="text-slate-500 mb-0.5">{game.homeTeam.abbreviation} starter</div>
+          <div className="text-white font-medium">{game.homeStartingPitcher?.fullName ?? 'TBD'}</div>
+          {game.homeStartingPitcher?.seasonStats && (
+            <div className="text-slate-400 font-mono mt-0.5">
+              {game.homeStartingPitcher.seasonStats.era.toFixed(2)} ERA · {game.homeStartingPitcher.seasonStats.whip.toFixed(2)} WHIP
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Weather */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs border-t border-slate-800/60 pt-2">
+        {!w && <span className="text-slate-700">Weather unavailable</span>}
+        {w?.isIndoor && <span className="text-slate-500">Dome</span>}
+        {w && !w.isIndoor && (
+          <>
+            <span className={tempColor}>{w.tempF.toFixed(0)}°F</span>
+            {w.windSpeedMph >= 5 ? (
+              <span className={windColor}>{w.windSpeedMph.toFixed(0)}mph {w.windDirectionLabel}</span>
+            ) : (
+              <span className="text-slate-600">Calm</span>
+            )}
+            {w.precipitationProbability >= 20 && (
+              <span className={w.precipitationProbability >= 70 ? 'text-red-400' : 'text-yellow-400'}>
+                Rain {w.precipitationProbability}%
+              </span>
+            )}
+          </>
+        )}
+        <span className="text-slate-600 ml-auto">Park ×{game.parkFactors.runsFactor.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── HEALTH INDICATOR ─────────────────────────────────────────────────────────
 
 function HealthDot({ status }: { status: string }) {
@@ -741,8 +880,8 @@ function formatDisplayDate(dateStr: string): string {
 
 // A single activeView replaces the old activeSection + activeProp pair.
 // Prop views (hr/hit/run/rbi) sort PredictionCards by that prop.
-// hrr/totalbases show their own card types. games shows game picks.
-type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games';
+// hrr/totalbases show their own card types. games/nrfi show game picks.
+type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games' | 'nrfi';
 
 const PROP_VIEWS: PropType[] = ['hr', 'hit', 'run', 'rbi'];
 
@@ -772,6 +911,7 @@ export default function Home() {
 
   // Derived flags
   const isGamesView = activeView === 'games';
+  const isNrfiView = activeView === 'nrfi';
   const isHrrView = activeView === 'hrr';
   const isTbView = activeView === 'totalbases';
   const isPropView = (PROP_VIEWS as string[]).includes(activeView);
@@ -910,9 +1050,9 @@ export default function Home() {
       {/* ── TOP NAV: Hitter Picks | Game Picks ─────────────────────────────────── */}
       <div className="flex flex-wrap bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 mb-3 w-fit">
         <button
-          onClick={() => { if (isGamesView) setActiveView('hr'); }}
+          onClick={() => { if (isGamesView || isNrfiView) setActiveView('hr'); }}
           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            !isGamesView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
+            !isGamesView && !isNrfiView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
           }`}
         >
           Hitter Picks
@@ -925,10 +1065,18 @@ export default function Home() {
         >
           Game Picks
         </button>
+        <button
+          onClick={() => setActiveView('nrfi')}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isNrfiView ? 'bg-emerald-800 text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          NRFI
+        </button>
       </div>
 
       {/* ── SUB-NAV: shown when in any hitter view ──────────────────────────────── */}
-      {!isGamesView && (
+      {!isGamesView && !isNrfiView && (
         <div className="flex flex-wrap bg-slate-900/50 border border-slate-800 rounded-lg p-1 gap-1 mb-5 w-fit">
           {PROP_VIEWS.map(p => (
             <button
@@ -1277,6 +1425,84 @@ export default function Home() {
         </>
       )}
 
+      {/* ── NRFI VIEW ───────────────────────────────────────────────────────────── */}
+      {isNrfiView && (
+        <>
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-slate-400 text-sm">
+              No Run First Inning — probability neither team scores in the 1st inning. Driven by starting pitcher quality, park, and weather.
+            </p>
+            <button
+              onClick={() => loadGamePredictions(selectedDate)}
+              disabled={gamesLoading}
+              className="px-4 py-1.5 bg-emerald-900 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {gamesLoading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+
+          {gamesLoading && !gameData && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="card animate-pulse">
+                  <div className="h-4 bg-slate-800 rounded w-full mb-3" />
+                  <div className="h-2 bg-slate-800 rounded-full mb-3" />
+                  <div className="h-4 bg-slate-800 rounded w-32 mb-2" />
+                  <div className="h-3 bg-slate-800 rounded w-full" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!gamesLoading && gameData && gameData.games.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-4xl mb-3">⚾</div>
+              <div className="text-slate-300 font-medium">No games scheduled</div>
+            </div>
+          )}
+
+          {gameData && gameData.games.length > 0 && (() => {
+            const nrfiSorted = [...gameData.games].sort((a, b) => {
+              // NRFI picks first (sorted by NRFI prob desc), then YRFI (sorted by NRFI prob asc), then no-pick
+              if (a.nrfiPick === 'NRFI' && b.nrfiPick !== 'NRFI') return -1;
+              if (a.nrfiPick !== 'NRFI' && b.nrfiPick === 'NRFI') return 1;
+              if (a.nrfiPick === 'YRFI' && b.nrfiPick !== 'YRFI') return 1;
+              if (a.nrfiPick !== 'YRFI' && b.nrfiPick === 'YRFI') return -1;
+              return b.nrfiProbability - a.nrfiProbability;
+            });
+
+            const nrfiLockHigh = nrfiSorted.filter(g => g.nrfiPick !== null && (g.nrfiConfidence === 'LOCK' || g.nrfiConfidence === 'HIGH'));
+            const nrfiRest = nrfiSorted.filter(g => !nrfiLockHigh.includes(g));
+
+            return (
+              <>
+                {nrfiLockHigh.length > 0 && (
+                  <div className="mb-7">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-emerald-400 text-sm font-bold">★ Best NRFI/YRFI Picks</span>
+                      <span className="text-slate-600 text-xs">{nrfiLockHigh.length} game{nrfiLockHigh.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {nrfiLockHigh.map(game => <NRFICard key={game.gamePk} game={game} />)}
+                    </div>
+                  </div>
+                )}
+                {nrfiRest.length > 0 && (
+                  <div>
+                    {nrfiLockHigh.length > 0 && (
+                      <div className="text-slate-600 text-xs font-medium mb-3 uppercase tracking-wide">All Games</div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {nrfiRest.map(game => <NRFICard key={game.gamePk} game={game} />)}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </>
+      )}
+
       {/* ── GAME PICKS ──────────────────────────────────────────────────────────── */}
       {isGamesView && (
         <>
@@ -1314,12 +1540,16 @@ export default function Home() {
           )}
 
           {gameData && gameData.games.length > 0 && (() => {
-            // Best Bets: ML LOCK/HIGH or any O/U LOCK
+            // Best Bets: ML LOCK/HIGH, any O/U LOCK, or NRFI LOCK/HIGH
             const bestBets = gameData.games.filter(g =>
-              g.confidence === 'LOCK' || g.confidence === 'HIGH' || g.totalConfidence === 'LOCK'
+              g.confidence === 'LOCK' || g.confidence === 'HIGH' ||
+              g.totalConfidence === 'LOCK' ||
+              (g.nrfiPick !== null && (g.nrfiConfidence === 'LOCK' || g.nrfiConfidence === 'HIGH'))
             );
             const theRest = gameData.games.filter(g =>
-              g.confidence !== 'LOCK' && g.confidence !== 'HIGH' && g.totalConfidence !== 'LOCK'
+              g.confidence !== 'LOCK' && g.confidence !== 'HIGH' &&
+              g.totalConfidence !== 'LOCK' &&
+              !(g.nrfiPick !== null && (g.nrfiConfidence === 'LOCK' || g.nrfiConfidence === 'HIGH'))
             );
             return (
               <>

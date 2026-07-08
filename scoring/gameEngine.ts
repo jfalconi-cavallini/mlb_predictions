@@ -111,6 +111,39 @@ function weatherRunsMultiplier(weather: WeatherConditions | null): number {
   return clamp(m, 0.75, 1.30);
 }
 
+// Per-team probability of not scoring in the first inning against a given pitcher.
+// League base rate: sqrt(~0.73 game NRFI rate) ≈ 0.855 per team vs average starter.
+function perTeamNRFIProb(pitcher: MLBPitcher | null): number {
+  const BASE = 0.855;
+  if (!pitcher?.seasonStats) return BASE;
+  const ss = pitcher.seasonStats;
+
+  // ERA scales the base probability — better ERA → lower first-inning run risk
+  const eraFactor = Math.pow(LEAGUE_ERA / Math.max(ss.era, 1.0), 0.30);
+
+  // WHIP directly measures baserunners allowed
+  const whipFactor = clamp(1 + (1.30 - ss.whip) / 12, 0.97, 1.04);
+
+  // High K/9 → fewer balls in play → harder to score (up to +3%)
+  const kBonus = clamp((ss.kPer9 - 8.5) / 25, 0, 0.03);
+
+  // High BB/9 → free baserunners → easier to score (up to -3%)
+  const bbPenalty = clamp((ss.bbPer9 - 3.0) / 30, 0, 0.03);
+
+  let prob = BASE * eraFactor * whipFactor + kBonus - bbPenalty;
+
+  // Blend in recent 14-day form when sample is meaningful
+  const pr = pitcher.recentStats;
+  if (pr && pr.innings >= 10) {
+    const rEra  = Math.pow(LEAGUE_ERA / Math.max(pr.era, 1.0), 0.30);
+    const rWhip = clamp(1 + (1.30 - pr.whip) / 12, 0.97, 1.04);
+    const recentProb = BASE * rEra * rWhip;
+    prob = prob * 0.80 + recentProb * 0.20;
+  }
+
+  return clamp(prob, 0.55, 0.95);
+}
+
 export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: WeatherConditions | null = null, ouLine: number | null = null): GamePrediction {
   const homePitcher = game.probableHomePitcher;
   const awayPitcher = game.probableAwayPitcher;
@@ -291,6 +324,46 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
     }
   }
 
+  // ── NRFI / YRFI ──────────────────────────────────────────────────────────
+  // Park adjustment: hitter-friendly parks lower NRFI probability (more runs expected)
+  const parkNRFIAdj = clamp(1 - (parkFactors.runsFactor - 1.0) * 0.25, 0.94, 1.04);
+
+  // Weather adjustment: hot temp / wind out → more offense → lower NRFI probability
+  const weatherNRFIAdj = weather && !weather.isIndoor
+    ? clamp(1 - (wMult - 1.0) * 0.50, 0.92, 1.04)
+    : 1.0;
+
+  // Each team's probability of not scoring in the 1st inning
+  const homeNoScoreProb = clamp(perTeamNRFIProb(awayPitcher) * parkNRFIAdj * weatherNRFIAdj, 0.55, 0.95);
+  const awayNoScoreProb = clamp(perTeamNRFIProb(homePitcher) * parkNRFIAdj * weatherNRFIAdj, 0.55, 0.95);
+  const nrfiProbability = clamp(homeNoScoreProb * awayNoScoreProb, 0.30, 0.92);
+
+  let nrfiPick: 'NRFI' | 'YRFI' | null = null;
+  let nrfiConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+  let nrfiPickLabel = '';
+
+  if (nrfiProbability >= 0.76) {
+    nrfiPick = 'NRFI';
+    nrfiPickLabel = 'NRFI';
+    if (nrfiProbability >= 0.83 && bothKnown) {
+      nrfiConfidence = 'LOCK';
+    } else if (nrfiProbability >= 0.79) {
+      nrfiConfidence = 'HIGH';
+    } else {
+      nrfiConfidence = 'MEDIUM';
+    }
+  } else if (nrfiProbability <= 0.63) {
+    nrfiPick = 'YRFI';
+    nrfiPickLabel = 'YRFI';
+    if (nrfiProbability <= 0.56 && bothKnown) {
+      nrfiConfidence = 'LOCK';
+    } else if (nrfiProbability <= 0.60) {
+      nrfiConfidence = 'HIGH';
+    } else {
+      nrfiConfidence = 'MEDIUM';
+    }
+  }
+
   return {
     gamePk: game.gamePk,
     homeTeam: game.homeTeam,
@@ -311,6 +384,10 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
     totalConfidence,
     totalPickLabel,
     ouLine,
+    nrfiProbability,
+    nrfiPick,
+    nrfiConfidence,
+    nrfiPickLabel,
     venue: game.venue,
     parkFactors,
     weather,
