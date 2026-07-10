@@ -4,6 +4,23 @@ const LEAGUE_ERA = 4.20;
 const LEAGUE_RUNS_PER_GAME = 4.5;
 const HOME_FIELD_BOOST = 1.04;
 
+// ─── CONFIDENCE TIER THRESHOLDS ───────────────────────────────────────────────
+// Single source of truth for the ML/NRFI confidence-tier boundaries below.
+// Exported so app/api/calibration-report/route.ts can display current values
+// alongside realized hit rates without duplicating these numbers.
+export const GAME_CONFIDENCE_THRESHOLDS = {
+  ml: {
+    lockWinProb: 0.62, lockRunDiff: 0.90, lockQualityDiff: 0.18,
+    highWinProb: 0.60, mediumWinProb: 0.55,
+  },
+  nrfi: {
+    pickThreshold: 0.76, lockThreshold: 0.83, highThreshold: 0.79,
+  },
+  yrfi: {
+    pickThreshold: 0.63, lockThreshold: 0.56, highThreshold: 0.60,
+  },
+};
+
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
@@ -195,16 +212,17 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
   // ── ML CONFIDENCE ────────────────────────────────────────────────────────
   // LOCK: high win prob + meaningful run edge + confirmed pitcher quality gap.
   // Intentionally rare — each LOCK added to the record must carry real weight.
+  const mlThresh = GAME_CONFIDENCE_THRESHOLDS.ml;
   const mlIsLock =
     bothKnown &&
-    winProb >= 0.62 &&
-    Math.abs(runDiff) >= 0.90 &&
-    Math.abs(qualityDiff) >= 0.18;
+    winProb >= mlThresh.lockWinProb &&
+    Math.abs(runDiff) >= mlThresh.lockRunDiff &&
+    Math.abs(qualityDiff) >= mlThresh.lockQualityDiff;
 
   const confidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW' =
-    mlIsLock        ? 'LOCK'   :
-    winProb >= 0.60 ? 'HIGH'   :
-    winProb >= 0.55 ? 'MEDIUM' :
+    mlIsLock                        ? 'LOCK'   :
+    winProb >= mlThresh.highWinProb ? 'HIGH'   :
+    winProb >= mlThresh.mediumWinProb ? 'MEDIUM' :
     'LOW';
 
   // ── OVER / UNDER PICK (independent of ML pick) ───────────────────────────
@@ -342,22 +360,25 @@ export function scoreGame(game: MLBGame, parkFactors: ParkFactors, weather: Weat
   let nrfiConfidence: 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
   let nrfiPickLabel = '';
 
-  if (nrfiProbability >= 0.76) {
+  const nrfiThresh = GAME_CONFIDENCE_THRESHOLDS.nrfi;
+  const yrfiThresh = GAME_CONFIDENCE_THRESHOLDS.yrfi;
+
+  if (nrfiProbability >= nrfiThresh.pickThreshold) {
     nrfiPick = 'NRFI';
     nrfiPickLabel = 'NRFI';
-    if (nrfiProbability >= 0.83 && bothKnown) {
+    if (nrfiProbability >= nrfiThresh.lockThreshold && bothKnown) {
       nrfiConfidence = 'LOCK';
-    } else if (nrfiProbability >= 0.79) {
+    } else if (nrfiProbability >= nrfiThresh.highThreshold) {
       nrfiConfidence = 'HIGH';
     } else {
       nrfiConfidence = 'MEDIUM';
     }
-  } else if (nrfiProbability <= 0.63) {
+  } else if (nrfiProbability <= yrfiThresh.pickThreshold) {
     nrfiPick = 'YRFI';
     nrfiPickLabel = 'YRFI';
-    if (nrfiProbability <= 0.56 && bothKnown) {
+    if (nrfiProbability <= yrfiThresh.lockThreshold && bothKnown) {
       nrfiConfidence = 'LOCK';
-    } else if (nrfiProbability <= 0.60) {
+    } else if (nrfiProbability <= yrfiThresh.highThreshold) {
       nrfiConfidence = 'HIGH';
     } else {
       nrfiConfidence = 'MEDIUM';

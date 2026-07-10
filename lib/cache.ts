@@ -1,18 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const CACHE_DIR = path.join(process.cwd(), 'data', 'predictions');
+const DATA_DIR = path.join(process.cwd(), 'data');
 
-function ensureCacheDir() {
-  if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+function ensureDir(namespace: string) {
+  const dir = path.join(DATA_DIR, namespace);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
+  return dir;
 }
 
-export function getCachedPredictions(date: string): Record<string, unknown> | null {
+export function getCached(namespace: string, date: string): Record<string, unknown> | null {
   try {
-    ensureCacheDir();
-    const filePath = path.join(CACHE_DIR, `${date}.json`);
+    const dir = ensureDir(namespace);
+    const filePath = path.join(dir, `${date}.json`);
     if (!fs.existsSync(filePath)) return null;
     return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
   } catch {
@@ -20,12 +22,34 @@ export function getCachedPredictions(date: string): Record<string, unknown> | nu
   }
 }
 
-export function savePredictions(date: string, data: Record<string, unknown>): void {
+export function saveCache(namespace: string, date: string, data: Record<string, unknown>): void {
   try {
-    ensureCacheDir();
-    const filePath = path.join(CACHE_DIR, `${date}.json`);
+    const dir = ensureDir(namespace);
+    const filePath = path.join(dir, `${date}.json`);
     fs.writeFileSync(filePath, JSON.stringify(data));
   } catch {
     // Cache write failure is non-fatal
   }
+}
+
+export function listCachedDates(namespace: string): string[] {
+  try {
+    const dir = ensureDir(namespace);
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.slice(0, -'.json'.length))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+// ─── BACKWARDS-COMPATIBLE WRAPPERS (player prop predictions) ─────────────────
+
+export function getCachedPredictions(date: string): Record<string, unknown> | null {
+  return getCached('predictions', date);
+}
+
+export function savePredictions(date: string, data: Record<string, unknown>): void {
+  saveCache('predictions', date, data);
 }

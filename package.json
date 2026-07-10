@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node tests/validation.test.js"
+    "test": "node tests/validation.test.js && node tests/grading.test.js"
   },
   "dependencies": {
     "next": "^15.3.0",

@@ -7,9 +7,11 @@ import { getParkFactors } from '../../../lib/parkFactors';
 import { fetchWeather } from '../../../lib/weather';
 import { fetchMLBOdds } from '../../../lib/odds';
 import { scoreGame } from '../../../scoring/gameEngine';
+import { getCached, saveCache } from '../../../lib/cache';
 import { GamePredictionAPIResponse } from '../../../types';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const GAME_PREDICTIONS_NAMESPACE = 'game-predictions';
 
 function getTodayET(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -24,6 +26,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: `Invalid date: ${raw}` }, { status: 400 });
     }
     date = raw;
+  }
+
+  // ── CACHE: Return locked game picks for past dates ──────────────────────────
+  const today = getTodayET();
+  if (date < today) {
+    const cached = getCached(GAME_PREDICTIONS_NAMESPACE, date);
+    if (cached) return NextResponse.json(cached);
   }
 
   const season = date.slice(0, 4);
@@ -49,10 +58,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return Math.abs(b.homeWinProbability - 0.5) - Math.abs(a.homeWinProbability - 0.5);
   });
 
-  return NextResponse.json({
+  const body: GamePredictionAPIResponse = {
     date,
     games: gamePredictions,
     generatedAt: new Date().toISOString(),
     warnings,
-  } satisfies GamePredictionAPIResponse);
+  };
+
+  // Save to cache so past-day views always return the same picks
+  if (date < today) {
+    saveCache(GAME_PREDICTIONS_NAMESPACE, date, body as unknown as Record<string, unknown>);
+  }
+
+  return NextResponse.json(body);
 }

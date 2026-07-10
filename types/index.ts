@@ -323,6 +323,99 @@ export interface GameResultsAPIResponse {
   gamesChecked: number;
 }
 
+// ─── GRADING / TRACK RECORD ──────────────────────────────────────────────────
+
+export type GamePickType = 'ml' | 'ou' | 'nrfi';
+export type GameConfidenceTier = 'LOCK' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface GameActual {
+  gamePk: number;
+  isFinal: boolean;
+  homeRuns: number;
+  awayRuns: number;
+  homeFirstInningRuns: number;
+  awayFirstInningRuns: number;
+}
+
+export interface PropGrade {
+  date: string;
+  playerId: number;
+  playerName: string;
+  prop: PropType;
+  tier: ConfidenceTier;
+  predictedProbability: number;
+  correct: boolean;
+}
+
+export interface GameGrade {
+  date: string;
+  gamePk: number;
+  pickType: GamePickType;
+  pickLabel: string;
+  confidence: GameConfidenceTier;
+  correct: boolean;
+}
+
+export interface DateGrade {
+  date: string;
+  allFinal: boolean;
+  gradedAt: string;
+  propGrades: PropGrade[];
+  gameGrades: GameGrade[];
+}
+
+export interface HitRateBucket {
+  wins: number;
+  total: number;
+  rate: number | null; // null when total === 0
+}
+
+export interface TrackRecordWindow {
+  props: Record<PropType, Record<ConfidenceTier, HitRateBucket>>;
+  games: Record<GamePickType, Record<GameConfidenceTier, HitRateBucket>>;
+}
+
+export type TrackRecordLogEntry =
+  | ({ category: 'prop' } & PropGrade)
+  | ({ category: 'game' } & GameGrade);
+
+export interface TrackRecordAPIResponse {
+  windows: {
+    last7: TrackRecordWindow;
+    last30: TrackRecordWindow;
+    allTime: TrackRecordWindow;
+  };
+  recentLog: TrackRecordLogEntry[];
+  gradedDateCount: number;
+  generatedAt: string;
+}
+
+export interface CalibrationSuggestion {
+  prop: PropType;
+  sampleSize: number;
+  predictedAvgProbability: number;
+  actualHitRate: number;
+  currentIntercept: number;
+  currentScale: number;
+  suggestedIntercept: number | null; // null when sample too small
+  note: string;
+}
+
+export interface ConfidenceTierFlag {
+  category: string; // e.g. "hr prop", "ml game pick"
+  higherTier: string;
+  lowerTier: string;
+  higherTierRate: number;
+  lowerTierRate: number;
+  note: string;
+}
+
+export interface CalibrationReportAPIResponse {
+  propSuggestions: CalibrationSuggestion[];
+  tierFlags: ConfidenceTierFlag[];
+  generatedAt: string;
+}
+
 // ─── VALIDATION RESULT ───────────────────────────────────────────────────────
 
 export interface ValidationResult {

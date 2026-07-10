@@ -318,6 +318,42 @@ export async function fetchGameBoxscore(gamePk: number): Promise<{
   }
 }
 
+// ─── GAME LINESCORE (ACTUAL RUNS, FOR GRADING ML/O-U/NRFI) ───────────────────
+
+interface LinescoreAPIResponse {
+  teams: {
+    home: { runs?: number };
+    away: { runs?: number };
+  };
+  innings: Array<{
+    num: number;
+    home?: { runs?: number };
+    away?: { runs?: number };
+  }>;
+}
+
+export interface GameLinescore {
+  homeRuns: number;
+  awayRuns: number;
+  homeFirstInningRuns: number;
+  awayFirstInningRuns: number;
+}
+
+export async function fetchGameLinescore(gamePk: number): Promise<GameLinescore | null> {
+  try {
+    const data = await mlbFetch<LinescoreAPIResponse>(`${BASE}/game/${gamePk}/linescore`);
+    const firstInning = data.innings.find(inn => inn.num === 1);
+    return {
+      homeRuns: Number(data.teams.home.runs ?? 0),
+      awayRuns: Number(data.teams.away.runs ?? 0),
+      homeFirstInningRuns: Number(firstInning?.home?.runs ?? 0),
+      awayFirstInningRuns: Number(firstInning?.away?.runs ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── TODAY'S SCHEDULE ─────────────────────────────────────────────────────────
 
 interface ScheduleAPIRaw {

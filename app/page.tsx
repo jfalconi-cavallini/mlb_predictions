@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier, GamePredictionAPIResponse, GamePrediction, GameResultsAPIResponse, PlayerGameResult } from '../types';
+import {
+  PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier, GamePredictionAPIResponse, GamePrediction,
+  GameResultsAPIResponse, PlayerGameResult, TrackRecordAPIResponse, CalibrationReportAPIResponse, HitRateBucket,
+  TrackRecordWindow, GamePickType, GameConfidenceTier,
+} from '../types';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -24,9 +28,11 @@ function tierClass(tier: ConfidenceTier): string {
 }
 
 function probBarColor(prob: number): string {
-  if (prob >= 0.12) return 'bg-yellow-400';
-  if (prob >= 0.08) return 'bg-green-500';
-  if (prob >= 0.05) return 'bg-blue-500';
+  // Thresholds match the (post-2026-07-10 recalibration) HR ELITE/STRONG/VALUE
+  // cutoffs — Hit/Run/RBI probabilities always clear the top bucket already.
+  if (prob >= 0.065) return 'bg-yellow-400';
+  if (prob >= 0.039) return 'bg-green-500';
+  if (prob >= 0.021) return 'bg-blue-500';
   return 'bg-slate-600';
 }
 
@@ -122,7 +128,7 @@ function PredictionCard({
       <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${probBarColor(prob)}`}
-          style={{ width: `${Math.min(prob * 6, 1) * 100}%` }}
+          style={{ width: `${Math.min(prob * (activeProp === 'hr' ? 20 : 6), 1) * 100}%` }}
         />
       </div>
 
@@ -861,6 +867,28 @@ function HealthDot({ status }: { status: string }) {
   return <span className={`inline-block w-2 h-2 rounded-full ${cls}`} />;
 }
 
+// ─── TRACK RECORD HELPERS ─────────────────────────────────────────────────────
+
+const SMALL_SAMPLE_THRESHOLD = 10;
+
+function HitRateRow({ label, bucket }: { label: string; bucket: HitRateBucket }) {
+  const smallSample = bucket.total > 0 && bucket.total < SMALL_SAMPLE_THRESHOLD;
+  const rateColor = bucket.rate === null ? 'text-slate-600' :
+    smallSample ? 'text-slate-400' :
+    bucket.rate >= 0.55 ? 'text-green-400' :
+    bucket.rate >= 0.45 ? 'text-yellow-400' : 'text-red-400';
+
+  return (
+    <div className="flex items-center justify-between text-sm py-0.5">
+      <span className="text-slate-400">{label}</span>
+      <span className={`font-mono ${rateColor}`}>
+        {bucket.rate === null ? '—' : pct(bucket.rate)}
+        <span className="text-slate-600 ml-1">({bucket.wins}/{bucket.total})</span>
+      </span>
+    </div>
+  );
+}
+
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 
 function getTodayET(): string {
@@ -881,7 +909,8 @@ function formatDisplayDate(dateStr: string): string {
 // A single activeView replaces the old activeSection + activeProp pair.
 // Prop views (hr/hit/run/rbi) sort PredictionCards by that prop.
 // hrr/totalbases show their own card types. games/nrfi show game picks.
-type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games' | 'nrfi';
+type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games' | 'nrfi' | 'track-record';
+type TrackRecordWindowKey = 'last7' | 'last30' | 'allTime';
 
 const PROP_VIEWS: PropType[] = ['hr', 'hit', 'run', 'rbi'];
 
@@ -904,6 +933,12 @@ export default function Home() {
   const [minProb, setMinProb] = useState(0);
   const [selectedDate, setSelectedDate] = useState<string>(getTodayET());
   const [displayCount, setDisplayCount] = useState(20);
+  const [trackRecordData, setTrackRecordData] = useState<TrackRecordAPIResponse | null>(null);
+  const [trackRecordLoading, setTrackRecordLoading] = useState(false);
+  const [trWindow, setTrWindow] = useState<TrackRecordWindowKey>('last30');
+  const [calibrationData, setCalibrationData] = useState<CalibrationReportAPIResponse | null>(null);
+  const [calibrationLoading, setCalibrationLoading] = useState(false);
+  const [showCalibration, setShowCalibration] = useState(false);
 
   const today = getTodayET();
   const isToday = selectedDate === today;
@@ -912,6 +947,7 @@ export default function Home() {
   // Derived flags
   const isGamesView = activeView === 'games';
   const isNrfiView = activeView === 'nrfi';
+  const isTrackRecordView = activeView === 'track-record';
   const isHrrView = activeView === 'hrr';
   const isTbView = activeView === 'totalbases';
   const isPropView = (PROP_VIEWS as string[]).includes(activeView);
@@ -961,6 +997,34 @@ export default function Home() {
     }
   }, []);
 
+  const loadTrackRecord = useCallback(async () => {
+    setTrackRecordLoading(true);
+    try {
+      const res = await fetch('/api/track-record');
+      if (!res.ok) return;
+      const json: TrackRecordAPIResponse = await res.json();
+      setTrackRecordData(json);
+    } catch {
+      // non-critical
+    } finally {
+      setTrackRecordLoading(false);
+    }
+  }, []);
+
+  const loadCalibrationReport = useCallback(async () => {
+    setCalibrationLoading(true);
+    try {
+      const res = await fetch('/api/calibration-report');
+      if (!res.ok) return;
+      const json: CalibrationReportAPIResponse = await res.json();
+      setCalibrationData(json);
+    } catch {
+      // non-critical
+    } finally {
+      setCalibrationLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadPredictions(selectedDate);
     loadGamePredictions(selectedDate);
@@ -970,6 +1034,18 @@ export default function Home() {
       setPlayerResults({});
     }
   }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate]);
+
+  useEffect(() => {
+    if (isTrackRecordView && !trackRecordData && !trackRecordLoading) {
+      loadTrackRecord();
+    }
+  }, [isTrackRecordView, trackRecordData, trackRecordLoading, loadTrackRecord]);
+
+  useEffect(() => {
+    if (showCalibration && !calibrationData && !calibrationLoading) {
+      loadCalibrationReport();
+    }
+  }, [showCalibration, calibrationData, calibrationLoading, loadCalibrationReport]);
 
   useEffect(() => { setDisplayCount(20); }, [activeView]);
 
@@ -1012,47 +1088,49 @@ export default function Home() {
   return (
     <div>
       {/* Date navigation */}
-      <div className="flex items-center gap-2 mb-5">
-        <button
-          onClick={() => goToDate(offsetDate(selectedDate, -1))}
-          disabled={loading}
-          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
-          aria-label="Previous day"
-        >
-          ‹
-        </button>
-        <input
-          type="date"
-          value={selectedDate}
-          max={today}
-          onChange={e => { if (e.target.value) goToDate(e.target.value); }}
-          className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-slate-600"
-        />
-        <button
-          onClick={() => goToDate(offsetDate(selectedDate, 1))}
-          disabled={loading || isToday}
-          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
-          aria-label="Next day"
-        >
-          ›
-        </button>
-        <span className="text-slate-400 text-sm">{formatDisplayDate(selectedDate)}</span>
-        {!isToday && (
+      {!isTrackRecordView && (
+        <div className="flex items-center gap-2 mb-5">
           <button
-            onClick={() => goToDate(today)}
-            className="ml-auto text-xs text-blue-400 hover:text-blue-300 transition-colors"
+            onClick={() => goToDate(offsetDate(selectedDate, -1))}
+            disabled={loading}
+            className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
+            aria-label="Previous day"
           >
-            Back to today
+            ‹
           </button>
-        )}
-      </div>
+          <input
+            type="date"
+            value={selectedDate}
+            max={today}
+            onChange={e => { if (e.target.value) goToDate(e.target.value); }}
+            className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-slate-600"
+          />
+          <button
+            onClick={() => goToDate(offsetDate(selectedDate, 1))}
+            disabled={loading || isToday}
+            className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
+            aria-label="Next day"
+          >
+            ›
+          </button>
+          <span className="text-slate-400 text-sm">{formatDisplayDate(selectedDate)}</span>
+          {!isToday && (
+            <button
+              onClick={() => goToDate(today)}
+              className="ml-auto text-xs text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              Back to today
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── TOP NAV: Hitter Picks | Game Picks ─────────────────────────────────── */}
       <div className="flex flex-wrap bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 mb-3 w-fit">
         <button
-          onClick={() => { if (isGamesView || isNrfiView) setActiveView('hr'); }}
+          onClick={() => { if (isGamesView || isNrfiView || isTrackRecordView) setActiveView('hr'); }}
           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            !isGamesView && !isNrfiView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
+            !isGamesView && !isNrfiView && !isTrackRecordView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
           }`}
         >
           Hitter Picks
@@ -1073,10 +1151,18 @@ export default function Home() {
         >
           NRFI
         </button>
+        <button
+          onClick={() => setActiveView('track-record')}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isTrackRecordView ? 'bg-purple-800 text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Track Record
+        </button>
       </div>
 
       {/* ── SUB-NAV: shown when in any hitter view ──────────────────────────────── */}
-      {!isGamesView && !isNrfiView && (
+      {!isGamesView && !isNrfiView && !isTrackRecordView && (
         <div className="flex flex-wrap bg-slate-900/50 border border-slate-800 rounded-lg p-1 gap-1 mb-5 w-fit">
           {PROP_VIEWS.map(p => (
             <button
@@ -1125,9 +1211,9 @@ export default function Home() {
                 <option value={0}>All</option>
                 {activeProp === 'hr' ? (
                   <>
-                    <option value={0.05}>5%+</option>
-                    <option value={0.08}>8%+</option>
-                    <option value={0.12}>12%+</option>
+                    <option value={0.02}>2%+</option>
+                    <option value={0.04}>4%+</option>
+                    <option value={0.065}>6.5%+</option>
                   </>
                 ) : (
                   <>
@@ -1579,6 +1665,189 @@ export default function Home() {
               </>
             );
           })()}
+        </>
+      )}
+
+      {/* ── TRACK RECORD ─────────────────────────────────────────────────────────── */}
+      {isTrackRecordView && (
+        <>
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-slate-400 text-sm">
+              Accountability: every ELITE/STRONG/VALUE prop pick and every game ML/O-U/NRFI pick, graded against what actually happened.
+            </p>
+            <button
+              onClick={loadTrackRecord}
+              disabled={trackRecordLoading}
+              className="px-4 py-1.5 bg-purple-900 hover:bg-purple-800 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {trackRecordLoading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+
+          {trackRecordLoading && !trackRecordData && (
+            <div className="text-center py-16 text-slate-500 text-sm">Grading historical picks against real results…</div>
+          )}
+
+          {trackRecordData && (
+            <>
+              <div className="flex flex-wrap items-center bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 mb-6 w-fit">
+                {(['last7', 'last30', 'allTime'] as TrackRecordWindowKey[]).map(w => (
+                  <button
+                    key={w}
+                    onClick={() => setTrWindow(w)}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      trWindow === w ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {w === 'last7' ? 'Last 7 Days' : w === 'last30' ? 'Last 30 Days' : 'All Time'}
+                  </button>
+                ))}
+                <div className="w-px bg-slate-700 mx-1 self-stretch" />
+                <span className="px-3 py-1 text-slate-600 text-xs self-center">
+                  {trackRecordData.gradedDateCount} day{trackRecordData.gradedDateCount !== 1 ? 's' : ''} graded
+                </span>
+              </div>
+
+              {trackRecordData.gradedDateCount === 0 && (
+                <div className="text-center py-16">
+                  <div className="text-4xl mb-3">📊</div>
+                  <div className="text-slate-300 font-medium">No graded picks yet</div>
+                  <div className="text-slate-500 text-sm mt-1">
+                    History builds up automatically once a day&apos;s locked-in picks go final.
+                  </div>
+                </div>
+              )}
+
+              {trackRecordData.gradedDateCount > 0 && (() => {
+                const w: TrackRecordWindow = trackRecordData.windows[trWindow];
+                const gamePickLabels: Array<[GamePickType, string]> = [
+                  ['ml', 'Moneyline'], ['ou', 'Over/Under'], ['nrfi', 'NRFI/YRFI'],
+                ];
+                return (
+                  <>
+                    <div className="mb-8">
+                      <div className="text-slate-400 text-xs font-medium mb-3 uppercase tracking-wide">Player Props</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                        {(['hr', 'hit', 'run', 'rbi'] as PropType[]).map(prop => (
+                          <div key={prop} className="card">
+                            <div className="text-white font-semibold mb-2">{PROP_LABELS[prop]}</div>
+                            {(['ELITE', 'STRONG', 'VALUE'] as ConfidenceTier[]).map(tier => (
+                              <HitRateRow key={tier} label={tier} bucket={w.props[prop][tier]} />
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mb-8">
+                      <div className="text-slate-400 text-xs font-medium mb-3 uppercase tracking-wide">Game Picks</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        {gamePickLabels.map(([pt, label]) => (
+                          <div key={pt} className="card">
+                            <div className="text-white font-semibold mb-2">{label}</div>
+                            {(['LOCK', 'HIGH', 'MEDIUM', 'LOW'] as GameConfidenceTier[]).map(tier => (
+                              <HitRateRow key={tier} label={tier} bucket={w.games[pt][tier]} />
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mb-8">
+                      <div className="text-slate-400 text-xs font-medium mb-3 uppercase tracking-wide">Recent Picks</div>
+                      <div className="card overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-slate-500 text-xs uppercase text-left">
+                              <th className="pb-2 pr-4">Date</th>
+                              <th className="pb-2 pr-4">Category</th>
+                              <th className="pb-2 pr-4">Pick</th>
+                              <th className="pb-2 pr-4">Confidence</th>
+                              <th className="pb-2 pr-4">Predicted</th>
+                              <th className="pb-2">Result</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {trackRecordData.recentLog.slice(0, 50).map((entry, i) => (
+                              <tr key={i} className="border-t border-slate-800">
+                                <td className="py-1.5 pr-4 text-slate-400 whitespace-nowrap">{entry.date}</td>
+                                <td className="py-1.5 pr-4 text-slate-300 whitespace-nowrap">
+                                  {entry.category === 'prop'
+                                    ? `${PROP_LABELS[entry.prop]} prop`
+                                    : { ml: 'Moneyline', ou: 'Over/Under', nrfi: 'NRFI/YRFI' }[entry.pickType]}
+                                </td>
+                                <td className="py-1.5 pr-4 text-slate-300 whitespace-nowrap">
+                                  {entry.category === 'prop' ? entry.playerName : entry.pickLabel}
+                                </td>
+                                <td className="py-1.5 pr-4 whitespace-nowrap">
+                                  <span className={`stat-pill ${entry.category === 'prop' ? tierClass(entry.tier) : ''}`}>
+                                    {entry.category === 'prop' ? entry.tier : entry.confidence}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 pr-4 text-slate-400 whitespace-nowrap">
+                                  {entry.category === 'prop' ? pct(entry.predictedProbability) : '—'}
+                                </td>
+                                <td className="py-1.5">
+                                  {entry.correct
+                                    ? <span className="text-green-400 font-bold">✓</span>
+                                    : <span className="text-red-400 font-bold">✗</span>}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </>
+          )}
+
+          <div className="mb-6">
+            <button
+              onClick={() => setShowCalibration(v => !v)}
+              className="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1.5"
+            >
+              <span>{showCalibration ? '▾' : '▸'}</span>
+              Calibration Suggestions
+              <span className="text-slate-600 text-xs">(manual review only — nothing here is applied automatically)</span>
+            </button>
+
+            {showCalibration && (
+              <div className="mt-3 card">
+                {calibrationLoading && !calibrationData && (
+                  <div className="text-slate-500 text-sm py-4">Computing suggestions from graded history…</div>
+                )}
+                {calibrationData && (
+                  <>
+                    <div className="mb-4">
+                      <div className="text-slate-300 font-medium mb-2 text-sm">Probability Calibration</div>
+                      <div className="space-y-2">
+                        {calibrationData.propSuggestions.map(s => (
+                          <div key={s.prop} className="text-sm text-slate-400 border-l-2 border-slate-700 pl-3">
+                            <span className="text-white font-medium">{PROP_LABELS[s.prop]}:</span> {s.note}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-300 font-medium mb-2 text-sm">Confidence Tier Flags</div>
+                      {calibrationData.tierFlags.length === 0 ? (
+                        <div className="text-sm text-slate-500">No tier ordering issues detected (or insufficient sample).</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {calibrationData.tierFlags.map((f, i) => (
+                            <div key={i} className="text-sm text-amber-400 border-l-2 border-amber-700 pl-3">{f.note}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>

@@ -21,6 +21,35 @@ function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
 }
 
+// ─── CALIBRATION CONSTANTS ────────────────────────────────────────────────────
+// Single source of truth for intercept/scale per prop (see scoreProbabilities
+// below for the raw-score formulas these apply to) and confidence tier cutoffs.
+// Exported so app/api/calibration-report/route.ts can compare live values
+// against realized hit rates without duplicating these numbers.
+
+// HR intercept recalibrated 2026-07-10 from graded history (/api/calibration-report):
+// n=717 ELITE/STRONG/VALUE picks predicted avg 37.0% HR but actually hit only 12.7% —
+// the model was over-calling HR by ~3x. Shifting intercept -8.90 → -11.41 (holding scale
+// fixed) realigns predicted probability with reality without touching the raw feature
+// weights or tier cutoffs below. See project_grading_track_record memory for the finding.
+export const PROP_CALIBRATION: Record<PropType, { intercept: number; scale: number }> = {
+  hit: { intercept: -0.35, scale: 0.256 },
+  run: { intercept: -5.62, scale: 0.256 },
+  rbi: { intercept: -5.75, scale: 0.355 },
+  hr:  { intercept: -11.41, scale: 0.557 },
+};
+
+// [ELITE, STRONG, VALUE] cutoffs per prop
+// HR cutoffs shifted 2026-07-10 by the same logit delta as PROP_CALIBRATION.hr's
+// intercept change, so the same players still qualify for each tier — only the
+// probability now reported for them is truthful instead of ~3x inflated.
+export const PROP_CONFIDENCE_THRESHOLDS: Record<PropType, [number, number, number]> = {
+  hit: [0.72, 0.68, 0.64],
+  run: [0.38, 0.33, 0.28],
+  rbi: [0.30, 0.25, 0.20],
+  hr:  [0.065, 0.039, 0.021],
+};
+
 // Convert raw score to probability. The intercept and scale are chosen so that:
 // - An average MLB hitter vs average pitcher in neutral conditions → ~0.27 hit prob
 // - Elite hitter in great spot → ~0.40–0.50
@@ -243,7 +272,7 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.parkHRFactor          * 0.3) +   // park affects balls in play
     (f.hitterOBPSkill        * 0.5);    // OBP hitters find ways on base
   // Calibrated from actual data: avg player raw ≈ 2.42 → 63%, elite raw ≈ 4.0 → 72%
-  const hit = scoreToProbability(hitRaw, -0.35, 0.256);
+  const hit = scoreToProbability(hitRaw, PROP_CALIBRATION.hit.intercept, PROP_CALIBRATION.hit.scale);
 
   // ── RUN PROBABILITY ───────────────────────────────────────────────────────
   // Probability of scoring at least 1 run.
@@ -256,7 +285,7 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.parkRunsFactor        * 0.7) +
     (f.weatherRunsBoost      * 0.5);
   // Calibrated: avg player raw ≈ 2.31 → 30%, elite raw ≈ 4.04 → 40%
-  const run = scoreToProbability(runRaw, -5.62, 0.256);
+  const run = scoreToProbability(runRaw, PROP_CALIBRATION.run.intercept, PROP_CALIBRATION.run.scale);
 
   // ── RBI PROBABILITY ───────────────────────────────────────────────────────
   // Probability of recording at least 1 RBI.
@@ -269,11 +298,14 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.hitterRecentForm      * 0.5) +
     (f.parkRunsFactor        * 0.4);
   // Calibrated: avg player raw ≈ 2.20 → 22%, elite raw ≈ 4.01 → 35%
-  const rbi = scoreToProbability(rbiRaw, -5.75, 0.355);
+  const rbi = scoreToProbability(rbiRaw, PROP_CALIBRATION.rbi.intercept, PROP_CALIBRATION.rbi.scale);
 
   // ── HR PROBABILITY ────────────────────────────────────────────────────────
   // Probability of hitting at least 1 HR in the game.
-  // Target: avg MLB player → ~6%, elite power (Alvarez-tier) → ~30%
+  // Original design target was avg MLB player ~6%, elite power ~30% (see intercept
+  // history above) — but graded outcomes showed the model was over-calling HR by
+  // ~3x, so post-2026-07-10 recalibration these run lower: avg player raw ≈ 3.96 →
+  // ~1.6%, elite raw ≈ 7.38 → ~9.6%. Matches what ELITE tier was actually hitting.
   const hrRaw =
     (f.hitterHRRate          * 3.0) +   // individual HR rate is the biggest predictor
     (f.hitterPowerSkill      * 1.5) +   // raw power
@@ -282,8 +314,7 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
     (f.weatherHRBoost        * 1.0) +   // wind/temp
     (f.hitterPlatoonEdge     * 0.6) +   // platoon matters less for raw power
     (f.hitterRecentForm      * 0.4);    // recent form matters less than HR rate
-  // Calibrated: avg player raw ≈ 3.96 → 6%, Alvarez-tier raw ≈ 7.38 → 30%
-  const hr = scoreToProbability(hrRaw, -8.90, 0.557);
+  const hr = scoreToProbability(hrRaw, PROP_CALIBRATION.hr.intercept, PROP_CALIBRATION.hr.scale);
 
   return { hit, run, rbi, hr };
 }
@@ -312,7 +343,7 @@ export function generateExplanations(
     const contributions: Record<string, number> = {};
 
     if (type === 'hr') {
-      if (f.hitterHRRate > 0.6) { drivers.push(`Strong HR rate this season (${(hitter.seasonStats?.hrRate ?? 0 * 600).toFixed(0)}+ HR pace)`); contributions['hrRate'] = f.hitterHRRate; }
+      if (f.hitterHRRate > 0.6) { drivers.push(`Strong HR rate this season (${((hitter.seasonStats?.hrRate ?? 0) * 600).toFixed(0)}+ HR pace per 600 PA)`); contributions['hrRate'] = f.hitterHRRate; }
       if (f.pitcherVulnerabilityHR > 0.65) { drivers.push(`Pitcher allows elevated HR rate (${pitcher?.seasonStats?.hrPer9?.toFixed(2) ?? 'N/A'} HR/9)`); contributions['pitcherHRVuln'] = f.pitcherVulnerabilityHR; }
       if (f.parkHRFactor > 0.65) { drivers.push(`Hitter-friendly park for HRs (${park.venueName}, ${park.hrFactor.toFixed(2)}× factor)`); contributions['parkHR'] = f.parkHRFactor; }
       if (f.weatherHRBoost > 0.60) { drivers.push(weather?.windDirectionLabel ? `Wind blowing ${weather.windDirectionLabel} (${weather.windSpeedMph} mph)` : `Favorable temperature (${weather?.tempF ?? '?'}°F)`); contributions['weather'] = f.weatherHRBoost; }
@@ -364,13 +395,7 @@ function getConfidenceTier(prob: number, prop: PropType): ConfidenceTier {
   // Thresholds calibrated to realistic per-game probabilities after recalibration.
   // Hit: avg player ~63%. ELITE = genuinely above average in a great spot.
   // HR:  avg player ~6%. ELITE = top power hitters in optimal conditions.
-  const thresholds: Record<PropType, [number, number, number]> = {
-    hit: [0.72, 0.68, 0.64],   // ELITE, STRONG, VALUE
-    run: [0.38, 0.33, 0.28],
-    rbi: [0.30, 0.25, 0.20],
-    hr:  [0.22, 0.14, 0.08],
-  };
-  const [elite, strong, value] = thresholds[prop];
+  const [elite, strong, value] = PROP_CONFIDENCE_THRESHOLDS[prop];
   if (prob >= elite) return 'ELITE';
   if (prob >= strong) return 'STRONG';
   if (prob >= value) return 'VALUE';
