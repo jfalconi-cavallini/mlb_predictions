@@ -909,7 +909,7 @@ function formatDisplayDate(dateStr: string): string {
 // A single activeView replaces the old activeSection + activeProp pair.
 // Prop views (hr/hit/run/rbi) sort PredictionCards by that prop.
 // hrr/totalbases show their own card types. games/nrfi show game picks.
-type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games' | 'nrfi' | 'track-record';
+type ActiveView = 'hr' | 'hit' | 'run' | 'rbi' | 'hrr' | 'totalbases' | 'games' | 'nrfi' | 'track-record' | 'best-bets';
 type TrackRecordWindowKey = 'last7' | 'last30' | 'allTime';
 
 const PROP_VIEWS: PropType[] = ['hr', 'hit', 'run', 'rbi'];
@@ -920,6 +920,131 @@ const PROP_LABELS: Record<PropType, string> = {
   run: 'Run',
   rbi: 'RBI',
 };
+
+// ─── BEST BETS (cross-category ranked list) ───────────────────────────────────
+// Combines the day's top-tier picks from every category (props, ML, O/U, NRFI)
+// into one ranked list. Ranking: top confidence tier first (LOCK/ELITE before
+// HIGH/STRONG — anything below is excluded, it isn't a standout pick), then by
+// that category+tier's realized historical hit rate (from the grading pipeline,
+// gated by sample size so a lucky/unlucky small sample can't skew the order),
+// then by the model's stated probability as a last tiebreaker.
+
+type BestBetCategory = 'prop' | 'ml' | 'ou' | 'nrfi';
+
+interface BestBetItem {
+  category: BestBetCategory;
+  tierRank: 0 | 1; // 0 = LOCK/ELITE, 1 = HIGH/STRONG
+  tierLabel: string;
+  title: string;
+  subtitle: string;
+  probability: number | null;
+  realizedRate: number | null;
+  realizedN: number;
+}
+
+const BEST_BET_TIER_RANK: Record<string, 0 | 1> = { LOCK: 0, ELITE: 0, HIGH: 1, STRONG: 1 };
+const MIN_REALIZED_SAMPLE = 15;
+
+function realizedFor(bucket: HitRateBucket | undefined): { rate: number | null; n: number } {
+  if (!bucket || bucket.rate === null || bucket.total < MIN_REALIZED_SAMPLE) return { rate: null, n: bucket?.total ?? 0 };
+  return { rate: bucket.rate, n: bucket.total };
+}
+
+function buildBestBets(
+  data: PredictionAPIResponse | null,
+  gameData: GamePredictionAPIResponse | null,
+  trackRecord: TrackRecordAPIResponse | null,
+): BestBetItem[] {
+  const items: BestBetItem[] = [];
+  const w = trackRecord?.windows.allTime ?? null;
+
+  if (data) {
+    for (const pred of data.predictions) {
+      for (const propType of PROP_VIEWS) {
+        const ex = pred.explanations.find(e => e.prop === propType);
+        if (!ex || (ex.confidence !== 'ELITE' && ex.confidence !== 'STRONG')) continue;
+        const { rate, n } = realizedFor(w?.props[propType][ex.confidence]);
+        items.push({
+          category: 'prop',
+          tierRank: BEST_BET_TIER_RANK[ex.confidence],
+          tierLabel: ex.confidence,
+          title: `${pred.hitter.fullName} — ${PROP_LABELS[propType]}`,
+          subtitle: `${pred.game.awayTeam.abbreviation || pred.game.awayTeam.name} @ ${pred.game.homeTeam.abbreviation || pred.game.homeTeam.name}`,
+          probability: ex.probability,
+          realizedRate: rate,
+          realizedN: n,
+        });
+      }
+    }
+  }
+
+  if (gameData) {
+    for (const g of gameData.games) {
+      const matchup = `${g.awayTeam.abbreviation || g.awayTeam.name} @ ${g.homeTeam.abbreviation || g.homeTeam.name}`;
+
+      if (g.pickSide && (g.confidence === 'LOCK' || g.confidence === 'HIGH')) {
+        const { rate, n } = realizedFor(w?.games.ml[g.confidence]);
+        items.push({
+          category: 'ml',
+          tierRank: BEST_BET_TIER_RANK[g.confidence],
+          tierLabel: g.confidence,
+          title: g.pickLabel,
+          subtitle: matchup,
+          probability: g.pickSide === 'home' ? g.homeWinProbability : g.awayWinProbability,
+          realizedRate: rate,
+          realizedN: n,
+        });
+      }
+
+      if (g.totalPick && g.ouLine !== null && (g.totalConfidence === 'LOCK' || g.totalConfidence === 'HIGH')) {
+        const { rate, n } = realizedFor(w?.games.ou[g.totalConfidence]);
+        items.push({
+          category: 'ou',
+          tierRank: BEST_BET_TIER_RANK[g.totalConfidence],
+          tierLabel: g.totalConfidence,
+          title: g.totalPickLabel,
+          subtitle: matchup,
+          probability: null,
+          realizedRate: rate,
+          realizedN: n,
+        });
+      }
+
+      if (g.nrfiPick && (g.nrfiConfidence === 'LOCK' || g.nrfiConfidence === 'HIGH')) {
+        const { rate, n } = realizedFor(w?.games.nrfi[g.nrfiConfidence]);
+        items.push({
+          category: 'nrfi',
+          tierRank: BEST_BET_TIER_RANK[g.nrfiConfidence],
+          tierLabel: g.nrfiConfidence,
+          title: g.nrfiPickLabel,
+          subtitle: matchup,
+          probability: g.nrfiPick === 'NRFI' ? g.nrfiProbability : 1 - g.nrfiProbability,
+          realizedRate: rate,
+          realizedN: n,
+        });
+      }
+    }
+  }
+
+  items.sort((a, b) => {
+    if (a.tierRank !== b.tierRank) return a.tierRank - b.tierRank;
+    if (a.realizedRate !== null || b.realizedRate !== null) {
+      return (b.realizedRate ?? -1) - (a.realizedRate ?? -1);
+    }
+    return (b.probability ?? 0) - (a.probability ?? 0);
+  });
+
+  return items;
+}
+
+function categoryBadge(category: BestBetCategory): { label: string; className: string } {
+  switch (category) {
+    case 'prop': return { label: 'PROP', className: 'bg-blue-950 text-blue-300 border border-blue-800' };
+    case 'ml':   return { label: 'MONEYLINE', className: 'bg-slate-800 text-blue-200 border border-slate-600' };
+    case 'ou':   return { label: 'O/U', className: 'bg-amber-950 text-amber-300 border border-amber-800' };
+    case 'nrfi': return { label: 'NRFI/YRFI', className: 'bg-emerald-950 text-emerald-300 border border-emerald-800' };
+  }
+}
 
 export default function Home() {
   const [data, setData] = useState<PredictionAPIResponse | null>(null);
@@ -948,6 +1073,7 @@ export default function Home() {
   const isGamesView = activeView === 'games';
   const isNrfiView = activeView === 'nrfi';
   const isTrackRecordView = activeView === 'track-record';
+  const isBestBetsView = activeView === 'best-bets';
   const isHrrView = activeView === 'hrr';
   const isTbView = activeView === 'totalbases';
   const isPropView = (PROP_VIEWS as string[]).includes(activeView);
@@ -1036,10 +1162,10 @@ export default function Home() {
   }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate]);
 
   useEffect(() => {
-    if (isTrackRecordView && !trackRecordData && !trackRecordLoading) {
+    if ((isTrackRecordView || isBestBetsView) && !trackRecordData && !trackRecordLoading) {
       loadTrackRecord();
     }
-  }, [isTrackRecordView, trackRecordData, trackRecordLoading, loadTrackRecord]);
+  }, [isTrackRecordView, isBestBetsView, trackRecordData, trackRecordLoading, loadTrackRecord]);
 
   useEffect(() => {
     if (showCalibration && !calibrationData && !calibrationLoading) {
@@ -1085,6 +1211,8 @@ export default function Home() {
         .sort((a, b) => b.projectedTB - a.projectedTB)
     : [];
 
+  const bestBetsList = isBestBetsView ? buildBestBets(data, gameData, trackRecordData) : [];
+
   return (
     <div>
       {/* Date navigation */}
@@ -1125,12 +1253,20 @@ export default function Home() {
         </div>
       )}
 
-      {/* ── TOP NAV: Hitter Picks | Game Picks ─────────────────────────────────── */}
+      {/* ── TOP NAV: Best Bets | Hitter Picks | Game Picks ──────────────────────── */}
       <div className="flex flex-wrap bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 mb-3 w-fit">
         <button
-          onClick={() => { if (isGamesView || isNrfiView || isTrackRecordView) setActiveView('hr'); }}
+          onClick={() => setActiveView('best-bets')}
           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            !isGamesView && !isNrfiView && !isTrackRecordView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
+            isBestBetsView ? 'bg-yellow-600 text-yellow-950' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          ★ Best Bets
+        </button>
+        <button
+          onClick={() => { if (isGamesView || isNrfiView || isTrackRecordView || isBestBetsView) setActiveView('hr'); }}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            !isGamesView && !isNrfiView && !isTrackRecordView && !isBestBetsView ? 'bg-mlb-navy text-white' : 'text-slate-400 hover:text-white'
           }`}
         >
           Hitter Picks
@@ -1162,7 +1298,7 @@ export default function Home() {
       </div>
 
       {/* ── SUB-NAV: shown when in any hitter view ──────────────────────────────── */}
-      {!isGamesView && !isNrfiView && !isTrackRecordView && (
+      {!isGamesView && !isNrfiView && !isTrackRecordView && !isBestBetsView && (
         <div className="flex flex-wrap bg-slate-900/50 border border-slate-800 rounded-lg p-1 gap-1 mb-5 w-fit">
           {PROP_VIEWS.map(p => (
             <button
@@ -1193,6 +1329,81 @@ export default function Home() {
             Total Bases
           </button>
         </div>
+      )}
+
+      {/* ── BEST BETS: cross-category ranked list ───────────────────────────────── */}
+      {isBestBetsView && (
+        <>
+          <div className="flex items-center justify-between mb-5">
+            <p className="text-slate-400 text-sm">
+              Every top-tier pick today (props, moneyline, O/U, NRFI/YRFI), ranked by confidence tier first,
+              then by how that tier has actually performed historically{trackRecordData ? ` (n≥${MIN_REALIZED_SAMPLE})` : ''}.
+            </p>
+            <button
+              onClick={() => loadTrackRecord()}
+              disabled={trackRecordLoading}
+              className="px-4 py-1.5 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {trackRecordLoading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+
+          {(loading || gamesLoading) && !data && !gameData && (
+            <div className="text-center py-16 text-slate-500 text-sm">Loading today&apos;s picks…</div>
+          )}
+
+          {data && gameData && bestBetsList.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-4xl mb-3">😶</div>
+              <div className="text-slate-300 font-medium">No standout picks today</div>
+              <div className="text-slate-500 text-sm mt-1">Nothing hit LOCK/ELITE or HIGH/STRONG confidence on this slate.</div>
+            </div>
+          )}
+
+          {bestBetsList.length > 0 && (
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-slate-500 text-xs uppercase text-left">
+                    <th className="pb-2 pr-3">#</th>
+                    <th className="pb-2 pr-3">Category</th>
+                    <th className="pb-2 pr-3">Pick</th>
+                    <th className="pb-2 pr-3">Matchup</th>
+                    <th className="pb-2 pr-3">Tier</th>
+                    <th className="pb-2 pr-3">Model Prob</th>
+                    <th className="pb-2">Historical Accuracy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bestBetsList.map((item, i) => {
+                    const badge = categoryBadge(item.category);
+                    return (
+                      <tr key={i} className="border-t border-slate-800">
+                        <td className="py-2 pr-3 text-slate-500 font-mono">{i + 1}</td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          <span className={`stat-pill ${badge.className}`}>{badge.label}</span>
+                        </td>
+                        <td className="py-2 pr-3 text-white font-medium whitespace-nowrap">{item.title}</td>
+                        <td className="py-2 pr-3 text-slate-400 whitespace-nowrap">{item.subtitle}</td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          <span className={`stat-pill ${item.tierRank === 0 ? 'tier-elite' : 'tier-strong'}`}>{item.tierLabel}</span>
+                        </td>
+                        <td className="py-2 pr-3 text-slate-300 font-mono whitespace-nowrap">
+                          {item.probability === null ? '—' : pct(item.probability)}
+                        </td>
+                        <td className="py-2 text-slate-400 font-mono whitespace-nowrap">
+                          {item.realizedRate === null
+                            ? <span className="text-slate-600">no history yet</span>
+                            : <>{pct(item.realizedRate)} <span className="text-slate-600">(n={item.realizedN})</span></>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       {/* ── HITTER PROP VIEWS (hr / hit / run / rbi) ────────────────────────────── */}
