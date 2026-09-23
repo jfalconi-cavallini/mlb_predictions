@@ -195,14 +195,23 @@ P(prop) = clamp(sigmoid((Σ weight_i × feature_i + intercept) × scale), 0.01, 
 
 The intercept and scale are calibrated so realistic baseline probabilities match known MLB single-game averages.
 
-**HR probability** is not that logit. `buildPrediction` overwrites it with `scoring/hrModel.ts`:
+**HR probability** for names on the HR tab is `scoring/hrBoard.ts`, not the logit above. The tab leads with a Spot Board (environment-first, at most 12) and then the rest of a Full Board (at most 20). If the gates leave fewer names, the list is shorter. It does not backfill from a suppressed park.
 
-```
-P(at least one HR) = 1 - (1 - q) ^ expectedPA
-q = regressed season HR/PA × sqrt(2026 park factor)
-```
+Hard gates: posted or projected regular, batting order 1–6 (7–9 only on an elite-park override), a known starter, a game HR environment around 1.05 or better (or Great/Elite weather), and a sample floor (80 season PA or 40 PA in the last 30 days). A game at 0.85 or below, Poor weather, or a park at −20% is banned. Season HR/PA is only a shrinkage prior. The rate is contact quality × pitcher vulnerability (fly-ball and hard-hit allowed, or a thin-sample flag) × park × weather × platoon × a small order boost. Barrel% and xISO stay null until an as-of Statcast feed exists; the live score labels ISO as `proxy`. Missing Statcast is not stored as 0.
 
-Season HR/PA is shrunk toward the league rate with a 200-PA prior. Expected PA comes from the posted batting-order slot when a lineup is up, from season playing time when it is not, and is near zero for a confirmed non-starter. The park factor is the team's own 2026 home-vs-road HR rate, square-root dampened. `npm run eval:hr` replays Sep 8–22: the previous logit was 3.20/20, this model is 4.13/20 (top 10: 2.07/10). Rolling HR/PA, oriented wind, and a retuned copy of the weights above did not beat that on the later half of the window.
+`scoring/hrModel.ts` is still the plate-appearance baseline (`npm run eval:hr`): regressed HR/PA × square-root park × expected PA. Sep 8–22, stats through the day before:
+
+| Board | Hits, empty slots count as misses | Mean published size | Sum of model probabilities | Actual homers on the published names |
+| --- | --- | --- | --- | --- |
+| Plate-appearance top 20 (previous HR tab) | 4.13/20 | 20 | ~4.0 | 4.13 |
+| Env gate only, same probabilities | 2.87/20 | 18.7 | 3.46 | 2.87 |
+| Env gate + as-of Statcast, no order filter | 3.00/20 | 18.7 | 4.49 | 3.00 |
+| Full recipe with as-of Statcast | 2.80/20 | 15.6 | 4.09 | 2.80 |
+| Full recipe as shipped (ISO proxy, Statcast null) | 2.40/20 | 15.5 | 3.89 | 2.40 |
+| Spot Board, Statcast on | 0.93/10 | 5.3 | 1.46 | 0.93 |
+| Spot Board as shipped | 0.93/10 | 5.3 | 1.39 | 0.93 |
+
+That is not progress on the top-20 hit rate. The previous logit was 3.20/20. A retune of those weights was 3.07/20. The replacement was still implemented: the product shape is two boards and a hard environment gate, and the Sep 8–22 window does not support treating 8–10/20 as the usual result. `npm run eval:hr:board` replays the table. Statcast in that script is play-by-play joined with `game date < slate date` (2,358 games). The live request path does not fan out those games.
 
 **Hit probability weights:**
 ```
@@ -511,9 +520,9 @@ When data is unavailable (pitcher not yet announced, weather API unavailable, ea
 
 ## Known Limitations and Next Steps
 
-**Statcast metrics not in the HR ranker** — xwOBA, barrel%, hard-hit%, and exit velocity stay `null`. The Stats API does not serve them. A season-long Savant barrel% blend, joined by player id, did not raise the Sep 8–22 top-20 hit rate on the later dates, so it is not wired in. A point-in-time Statcast feed is still worth testing; a full-season rate is not a free upgrade.
+**Statcast is not on the live HR board** — barrel%, xISO, hard-hit%, and exit velocity stay `null` (`statcastOrNull` in `lib/mlbApi.ts`). The Stats API does not serve them, and a full-season Savant file would leak into a backtest. The Sep 8–22 `+Statcast` column above uses play-by-play frozen the day before each slate and still finished at 2.80/20, under the 4.13 plate-appearance list. ISO is labeled `proxy` on every live card.
 
-**Lineups when posted** — the schedule hydrate includes batting orders. Starters are marked `CONFIRMED` and the HR model uses their slot. Games without a posted lineup still fall back to season playing time.
+**Lineups when posted** — the schedule hydrate includes batting orders. Starters are marked `CONFIRMED`. The HR board keeps spots 1–6, and spots 7–9 only with an elite-park override. With no lineup posted, a regular (about 3.2 PA per team game) stays on the board as `projected` / `order-unknown`. A confirmed non-starter is dropped.
 
 **Pitcher FIP/xFIP not in public MLB API** — the model uses ERA and WHIP as pitcher quality signals. FIP (Fielding Independent Pitching) and xFIP are better predictors of true pitcher skill but require FanGraphs or a Statcast endpoint.
 
@@ -539,8 +548,9 @@ Open `http://localhost:3000`. No environment variables required. All external AP
 # Type-check without building
 npx tsc --noEmit
 
-# Replay the HR top-20 backtest (needs network; caches under /tmp/hrbt-cache)
+# Replay the plate-appearance top 20 and the HR board (needs network; caches under /tmp/hrbt-cache)
 npm run eval:hr
+npm run eval:hr:board
 
 # Run validation regression tests at runtime
 curl http://localhost:3000/api/validate

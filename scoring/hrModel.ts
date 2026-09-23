@@ -1,6 +1,13 @@
-// Home-run probability for the daily top-20 ranking.
+// Plate-appearance HR probability.
 //
-// Replaces the additive logit in scoring/engine.ts for the HR prop only.
+// The HR tab no longer sorts on this. scoring/hrBoard.ts applies the hard
+// gates, ISO/Statcast score, and spot/full boards. This function is the
+// env-gate ablation baseline and the probability stored for hitters who do
+// not make the board. On Sep 8–22 it was 4.13/20. The replacement board did
+// not beat that. See scripts/hr-board-eval.mjs.
+//
+// Replaces the additive logit in scoring/engine.ts for the HR prop only,
+// before the board overwrites published names.
 // Backtest (2026-09-08 through 2026-09-22, stats frozen the day before each
 // slate, top 20 vs actual boxscore HRs):
 //   previous logit, static park table: 3.20 / 20

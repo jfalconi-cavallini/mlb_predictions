@@ -248,6 +248,35 @@ export interface ScheduleAPIResponse {
   warnings: string[];
 }
 
+export interface HrPickLog {
+  playerId: number;
+  gamePk: number;
+  probability: number;
+  envMultiplier: number;
+  stadiumHr: number | null;
+  weatherMultiplier: number;
+  weatherLabel: string;
+  envBucket: 'elite' | 'average' | 'banned';
+  order: number | null;
+  barrelPct: number | null;
+  xIso: number | null;
+  iso: number | null;
+  contactSource: 'statcast' | 'proxy';
+  asOfDate: string;
+  pitcherVuln: number | null;
+  flags: string[];
+  filterReason: string | null;
+}
+
+export interface HrBoardPayload {
+  asOfDate: string;
+  /** proxy until an as-of Statcast feed is wired. mixed if some rows have barrels. */
+  contactSource: 'statcast' | 'proxy' | 'mixed';
+  spotKeys: string[];
+  fullKeys: string[];
+  picks: HrPickLog[];
+}
+
 export interface PredictionAPIResponse {
   date: string;
   validatedHitters: number;
@@ -257,6 +286,7 @@ export interface PredictionAPIResponse {
   sourceHealth: DataSourceHealth;
   generatedAt: string;
   warnings: string[];
+  hrBoard?: HrBoardPayload;
 }
 
 export interface DataSourceHealth {

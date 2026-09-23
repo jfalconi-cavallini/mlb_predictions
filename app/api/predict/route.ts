@@ -9,15 +9,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchTodaysGames } from '../../../lib/mlbApi';
 import { validateAndBuildHitterPool } from '../../../lib/validation';
-import { buildPrediction } from '../../../scoring/engine';
-import { loadHrSlateContext } from '../../../lib/hrContext';
-import { HomeRunInput, LEAGUE_HR_PA_FALLBACK } from '../../../scoring/hrModel';
+import { buildPrediction, PROP_CONFIDENCE_THRESHOLDS } from '../../../scoring/engine';
+import { loadHrSlateContext, HrSlateContext } from '../../../lib/hrContext';
+import { HomeRunInput, LEAGUE_HR_PA_FALLBACK, homeRunProbability } from '../../../scoring/hrModel';
+import {
+  buildBoards, explainBoardPick, FULL_BOARD_OPTIONS, HrCandidate, pickKey, WEATHER_NEUTRAL_VENUE_IDS,
+} from '../../../scoring/hrBoard';
+import { CENTER_FIELD_BEARING, classifyWind, outComponentToward } from '../../../lib/wind';
 import { getParkFactors } from '../../../lib/parkFactors';
 import { fetchWeather } from '../../../lib/weather';
 import { getCachedPredictions, savePredictions } from '../../../lib/cache';
 import {
   PredictionAPIResponse, HitterPrediction, MLBGame, MLBPitcher, DataSourceHealth,
-  WeatherConditions,
+  WeatherConditions, Hand, HrBoardPayload, HrPickLog,
 } from '../../../types';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,7 +49,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const today = getTodayET();
   if (date < today) {
     const cached = getCachedPredictions(date);
-    if (cached) return NextResponse.json(cached);
+    // Boards shipped after the first cache. An old file has no hrBoard and
+    // would freeze the HR tab on the previous ranker.
+    if (cached && cached.hrBoard) return NextResponse.json(cached);
   }
 
   // ── STEP 1: Fetch today's schedule ─────────────────────────────────────────
@@ -102,6 +108,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   // ── STEP 4b: Build predictions ────────────────────────────────────────────
   const predictions: HitterPrediction[] = [];
+  const boardCandidates: HrCandidate[] = [];
 
   for (const hitter of validationResult.accepted) {
     const game = teamGameObjMap.get(hitter.team.id);
@@ -145,9 +152,49 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     const prediction = buildPrediction(hitter, game, opposingPitcher, parkFactors, weather, hrInput);
     predictions.push(prediction);
+    boardCandidates.push(toBoardCandidate(hitter, game, opposingPitcher, weather, hrCtx, hrInput));
   }
 
-  // ── STEP 5: Sort by HR probability (descending) ────────────────────────────
+  const built = buildBoards(boardCandidates, FULL_BOARD_OPTIONS, hrCtx.endDate);
+  const published = new Map<string, HrPickLog>();
+  for (const pick of [...built.spot, ...built.full]) {
+    const key = pickKey(pick.playerId, pick.gamePk);
+    if (!published.has(key)) published.set(key, pick);
+  }
+  for (const pred of predictions) {
+    const pick = published.get(pickKey(pred.hitter.id, pred.game.gamePk));
+    if (!pick) continue;
+    pred.probabilities.hr = pick.probability;
+    const hrExpl = pred.explanations.find(e => e.prop === 'hr');
+    if (hrExpl) {
+      hrExpl.probability = pick.probability;
+      hrExpl.confidence = hrTier(pick.probability);
+      hrExpl.keyDrivers = explainBoardPick(pick).slice(0, 4);
+      hrExpl.featureContributions = {
+        env: pick.envMultiplier,
+        weather: pick.weatherMultiplier,
+        stadiumHr: pick.stadiumHr ?? 1,
+        pitcherVuln: pick.pitcherVuln ?? 1,
+        order: pick.order ?? 0,
+      };
+    }
+  }
+
+  const contactSource = boardContactSource([...published.values()]);
+  const hrBoard: HrBoardPayload = {
+    asOfDate: hrCtx.endDate,
+    contactSource,
+    spotKeys: built.spot.map(p => pickKey(p.playerId, p.gamePk)),
+    fullKeys: built.full.map(p => pickKey(p.playerId, p.gamePk)),
+    picks: [...published.values()],
+  };
+  warnings.push(
+    contactSource === 'proxy'
+      ? `HR board stats through ${hrCtx.endDate}. Barrel% and xISO are null; contact is an ISO proxy until an as-of Statcast feed is wired.`
+      : `HR board stats through ${hrCtx.endDate}. Contact source: ${contactSource}.`,
+  );
+
+  // Hit / run / RBI keep their own sort. The HR tab reads hrBoard order.
   predictions.sort((a, b) => b.probabilities.hr - a.probabilities.hr);
 
   const health = buildHealth(
@@ -169,12 +216,109 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     sourceHealth: health,
     generatedAt: now,
     warnings,
+    hrBoard,
   };
 
   // Save to cache so past-day views always return the same picks
   savePredictions(date, body as unknown as Record<string, unknown>);
 
   return NextResponse.json(body);
+}
+
+function hrTier(prob: number): 'ELITE' | 'STRONG' | 'VALUE' | 'LOW' {
+  const [elite, strong, value] = PROP_CONFIDENCE_THRESHOLDS.hr;
+  if (prob >= elite) return 'ELITE';
+  if (prob >= strong) return 'STRONG';
+  if (prob >= value) return 'VALUE';
+  return 'LOW';
+}
+
+function boardContactSource(picks: HrPickLog[]): HrBoardPayload['contactSource'] {
+  const sources = new Set(picks.map(p => p.contactSource));
+  if (sources.size === 0) return 'proxy';
+  if (sources.size > 1) return 'mixed';
+  return sources.has('statcast') ? 'statcast' : 'proxy';
+}
+
+function pullOffset(bat: Hand, pitcher: Hand | null): number {
+  const stand = bat === 'S' ? (pitcher === 'L' ? 'R' : 'L') : bat;
+  return stand === 'R' ? -45 : 45;
+}
+
+function isoFromLine(line: { ab: number; doubles: number; triples: number; hr: number } | undefined): number | null {
+  if (!line || line.ab < 40) return null;
+  return (line.doubles + 2 * line.triples + 3 * line.hr) / line.ab;
+}
+
+function toBoardCandidate(
+  hitter: { id: number; batHand: Hand; team: { id: number }; seasonStats: { iso: number; paCount: number; hrRate: number } | null },
+  game: MLBGame,
+  opposingPitcher: MLBPitcher | null,
+  weather: WeatherConditions | null,
+  hrCtx: HrSlateContext,
+  hrInput: HomeRunInput,
+): HrCandidate {
+  const counted = hrCtx.hitting.get(hitter.id);
+  const l14 = hrCtx.l14.get(hitter.id);
+  const throwHand = opposingPitcher?.throwHand ?? null;
+  const split = throwHand === 'L' ? hrCtx.vsL.get(hitter.id) : throwHand === 'R' ? hrCtx.vsR.get(hitter.id) : undefined;
+  const stand = hitter.batHand === 'S' ? (throwHand === 'L' ? 'R' : 'L') : hitter.batHand;
+  const pit = opposingPitcher ? hrCtx.pitching.get(opposingPitcher.id) : undefined;
+  const pitHand = opposingPitcher
+    ? (stand === 'L' ? hrCtx.pitchingVsL.get(opposingPitcher.id) : hrCtx.pitchingVsR.get(opposingPitcher.id))
+    : undefined;
+  const neutral = WEATHER_NEUTRAL_VENUE_IDS.has(game.venue.id) || !!weather?.isIndoor;
+  const cfBearing = CENTER_FIELD_BEARING[game.venue.id];
+  const from = weather?.windDirectionDeg ?? 0;
+  const mph = weather?.windSpeedMph ?? 0;
+  const cfOut = !weather || neutral ? 0 : classifyWind(game.venue.id, from, mph, false).outComponent;
+  const pullOut = !weather || neutral || cfBearing == null
+    ? 0
+    : outComponentToward(from, mph, false, cfBearing + pullOffset(hitter.batHand, throwHand));
+  const gamesPlayed = hrCtx.teamGames.get(hitter.team.id) ?? 0;
+  const seasonPa = counted?.pa ?? hitter.seasonStats?.paCount ?? 0;
+  return {
+    playerId: hitter.id,
+    gamePk: game.gamePk,
+    teamId: hitter.team.id,
+    batHand: hitter.batHand,
+    lineupSpot: hrInput.lineupSpot,
+    lineupKnown: hrInput.lineupKnown,
+    seasonPaPerGame: gamesPlayed > 0 ? seasonPa / gamesPlayed : null,
+    seasonHr: hrInput.hr,
+    seasonPa,
+    iso: isoFromLine(counted) ?? (hitter.seasonStats ? hitter.seasonStats.iso : null),
+    vsHandHr: split?.hr ?? null,
+    vsHandPa: split?.pa ?? null,
+    l14Hr: l14?.hr ?? 0,
+    l14Pa: l14?.pa ?? 0,
+    l30Pa: hrCtx.l30Pa.get(hitter.id) ?? 0,
+    contactSeason: null,
+    contactL14: null,
+    xIso: null,
+    pitcherKnown: opposingPitcher != null,
+    pitcherHand: throwHand,
+    pitcherHr: pit?.hr ?? 0,
+    pitcherBf: pit?.bf ?? 0,
+    pitcherVsHandHr: pitHand?.hr ?? null,
+    pitcherVsHandBf: pitHand?.pa ?? null,
+    pitcherAirOuts: pit ? pit.airOuts : null,
+    pitcherGroundOuts: pit ? pit.groundOuts : null,
+    pitcherHard: null,
+    pitcherBbe: null,
+    stadiumHr: hrCtx.stadiumByHomeTeam.get(game.homeTeam.id) ?? null,
+    weather: {
+      tempF: weather && !neutral ? weather.tempF : null,
+      windMph: weather && !neutral ? weather.windSpeedMph : null,
+      cfOut,
+      pullOut,
+      indoorOrRoof: neutral,
+      missing: !neutral && !weather,
+    },
+    leagueHrPa: hrCtx.leagueHrPa || LEAGUE_HR_PA_FALLBACK,
+    leagueIso: hrCtx.leagueIso,
+    baselineProbability: homeRunProbability(hrInput),
+  };
 }
 
 function buildHealth(

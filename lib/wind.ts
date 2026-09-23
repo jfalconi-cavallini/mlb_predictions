@@ -63,3 +63,23 @@ export function classifyWind(
   if (delta >= 135) return { label: 'in from CF', kind: 'in', outComponent };
   return { label: 'crosswind', kind: 'cross', outComponent };
 }
+
+/**
+ * +1 when the wind blows toward `targetBearing`, −1 when it blows away from it.
+ * Same calm / indoor / missing-mph rules as classifyWind. A missing park
+ * azimuth is the caller's problem: this uses the bearing it is given.
+ */
+export function outComponentToward(
+  fromDeg: number,
+  mph: number,
+  indoor: boolean,
+  targetBearing: number,
+): number {
+  if (indoor) return 0;
+  if (!Number.isFinite(mph) || mph < 5) return 0;
+  if (!Number.isFinite(fromDeg) || !Number.isFinite(targetBearing)) return 0;
+  const toward = (((fromDeg + 180) % 360) + 360) % 360;
+  const bearing = ((targetBearing % 360) + 360) % 360;
+  const delta = angleDelta(toward, bearing);
+  return Math.cos((delta * Math.PI) / 180);
+}

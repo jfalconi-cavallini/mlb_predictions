@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node tests/validation.test.js && node tests/grading.test.js && node --experimental-strip-types --test tests/hrModel.test.mjs tests/weatherWind.test.mjs",
-    "eval:hr": "node --experimental-strip-types scripts/hr-top20-eval.mjs"
+    "test": "node tests/validation.test.js && node tests/grading.test.js && node --experimental-strip-types --test tests/hrModel.test.mjs tests/hrBoard.test.mjs tests/weatherWind.test.mjs",
+    "eval:hr": "node --experimental-strip-types scripts/hr-top20-eval.mjs",
+    "eval:hr:board": "node --experimental-strip-types scripts/hr-board-eval.mjs"
   },
   "dependencies": {
     "next": "^15.3.0",

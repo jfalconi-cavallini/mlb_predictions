@@ -20,6 +20,16 @@ async function mlbFetch<T>(url: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * Statcast rates are absent from the Stats API. Missing stays null.
+ * A measured 0 stays 0. Do not coerce null/undefined through `Number(x) || 0`.
+ */
+export function statcastOrNull(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 // ─── ROSTER ───────────────────────────────────────────────────────────────────
 
 export interface RosterHitter {
@@ -114,10 +124,10 @@ export async function fetchHitterSeasonStats(
       ops,
       iso: Math.max(0, slg - avg),
       woba: null,        // not in standard Stats API — Statcast only
-      xwoba: null,
-      barrelPct: null,
-      hardHitPct: null,
-      avgExitVelo: null,
+      xwoba: statcastOrNull(split.xwoba),
+      barrelPct: statcastOrNull(split.barrelPct),
+      hardHitPct: statcastOrNull(split.hardHitPct),
+      avgExitVelo: statcastOrNull(split.avgExitVelo),
       kPct: pa > 0 ? k / pa : 0,
       bbPct: pa > 0 ? bb / pa : 0,
       hrRate: pa > 0 ? hr / pa : 0,
@@ -158,8 +168,8 @@ export async function fetchHitterRecentStats(
       slg,
       hrCount: hr,
       paCount: pa,
-      hardHitPct: null,
-      avgExitVelo: null,
+      hardHitPct: statcastOrNull(split.hardHitPct),
+      avgExitVelo: statcastOrNull(split.avgExitVelo),
     };
   } catch {
     return null;
@@ -226,9 +236,9 @@ export async function fetchPitcherStats(
       hrPer9: parseFloat(String(ss.homeRunsPer9)) || 1.20,
       kPer9: parseFloat(String(ss.strikeoutsPer9Inn)) || 8.50,
       bbPer9: parseFloat(String(ss.walksPer9Inn)) || 3.00,
-      hrFbRate: null,
-      hardHitPctAllowed: null,
-      barrelPctAllowed: null,
+      hrFbRate: statcastOrNull(ss.homeRunsPerFlyBall ?? ss.hrFbRate),
+      hardHitPctAllowed: statcastOrNull(ss.hardHitPctAllowed ?? ss.hardHitPercent),
+      barrelPctAllowed: statcastOrNull(ss.barrelPctAllowed ?? ss.barrelPercent),
       innings: parseFloat(String(ss.inningsPitched)) || 0,
     } : null;
 

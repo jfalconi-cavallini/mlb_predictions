@@ -92,11 +92,13 @@ export function extractFeatures(
   const hitterContactSkill = regress((avgNorm * 0.40) + (obpNorm * 0.35) + (kInv * 0.25));
 
   // ── HITTER POWER SKILL ────────────────────────────────────────────────────
-  // Based on: ISO (50%), SLG (30%), hardHit% (20% if available)
+  // ISO (50%) and SLG (30%). Hard-hit% is 20% only when Statcast actually
+  // returned it. A missing hard-hit% is not league-average contact.
   const isoNorm = ss ? clamp((ss.iso - 0.05) / 0.25, 0, 1) : 0.30;      // 0.05–0.30 ISO range
   const slgNorm = ss ? clamp((ss.slg - 0.25) / 0.35, 0, 1) : 0.35;      // 0.25–0.60 SLG range
-  const hardHitNorm = ss?.hardHitPct ? clamp((ss.hardHitPct - 0.25) / 0.35, 0, 1) : 0.35;
-  const hitterPowerSkill = regress((isoNorm * 0.50) + (slgNorm * 0.30) + (hardHitNorm * 0.20));
+  const hitterPowerSkill = ss?.hardHitPct != null
+    ? regress((isoNorm * 0.50) + (slgNorm * 0.30) + (clamp((ss.hardHitPct - 0.25) / 0.35, 0, 1) * 0.20))
+    : regress((isoNorm * 0.50) / 0.80 + (slgNorm * 0.30) / 0.80);
 
   // ── HITTER HR RATE ───────────────────────────────────────────────────────
   // Direct: HR per PA, normalized to 0–1 range
@@ -146,10 +148,11 @@ export function extractFeatures(
   if (ps) {
     const hrPer9Norm = clamp((ps.hrPer9 - 0.5) / 2.0, 0, 1);   // 0.5–2.5 HR/9 range
     const eraProxy = clamp((ps.era - 2.0) / 4.0, 0, 1);          // ERA 2.0–6.0
-    const hardHitAllowed = ps.hardHitPctAllowed
-      ? clamp((ps.hardHitPctAllowed - 0.25) / 0.25, 0, 1)
-      : 0.50;
-    let seasonVuln = (hrPer9Norm * 0.50) + (eraProxy * 0.25) + (hardHitAllowed * 0.25);
+    // Hard-hit allowed is Statcast. When it is null, drop the term instead of
+    // pretending the pitcher is league-average in contact quality.
+    let seasonVuln = ps.hardHitPctAllowed != null
+      ? (hrPer9Norm * 0.50) + (eraProxy * 0.25) + (clamp((ps.hardHitPctAllowed - 0.25) / 0.25, 0, 1) * 0.25)
+      : (hrPer9Norm * 0.50) / 0.75 + (eraProxy * 0.25) / 0.75;
     if (pr && pr.innings >= 8) {
       const rHRNorm = clamp((pr.hrPer9 - 0.5) / 2.0, 0, 1);
       const rEraNorm = clamp((pr.era - 2.0) / 4.0, 0, 1);
@@ -344,7 +347,13 @@ export function generateExplanations(
       if (f.parkHRFactor > 0.65) { drivers.push(`Hitter-friendly park for HRs (${park.venueName}, ${park.hrFactor.toFixed(2)}× factor)`); contributions['parkHR'] = f.parkHRFactor; }
       if (f.weatherHRBoost > 0.60) { drivers.push(weather?.windDirectionLabel ? `Wind blowing ${weather.windDirectionLabel} (${weather.windSpeedMph} mph)` : `Favorable temperature (${weather?.tempF ?? '?'}°F)`); contributions['weather'] = f.weatherHRBoost; }
       if (f.platoonAdvantage) { drivers.push(`Platoon advantage (${hitter.batHand} vs ${pitcher?.throwHand ?? '?'}HP)`); contributions['platoon'] = f.hitterPlatoonEdge; }
-      if (f.hitterPowerSkill > 0.65) { drivers.push(`Elite power profile (ISO/SLG/barrel%)`); contributions['powerSkill'] = f.hitterPowerSkill; }
+      if (f.hitterPowerSkill > 0.65) {
+        const barrel = hitter.seasonStats?.barrelPct;
+        drivers.push(barrel != null
+          ? `Elite power profile (ISO/SLG/barrel%)`
+          : `Elite power profile (ISO/SLG; barrel% unavailable)`);
+        contributions['powerSkill'] = f.hitterPowerSkill;
+      }
     }
 
     if (type === 'hit') {

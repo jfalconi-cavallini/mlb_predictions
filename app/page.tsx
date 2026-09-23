@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   PredictionAPIResponse, HitterPrediction, PropType, ConfidenceTier, GamePredictionAPIResponse, GamePrediction,
   GameResultsAPIResponse, PlayerGameResult, TrackRecordAPIResponse, CalibrationReportAPIResponse, HitRateBucket,
-  TrackRecordWindow, GamePickType, GameConfidenceTier,
+  TrackRecordWindow, GamePickType, GameConfidenceTier, HrPickLog,
 } from '../types';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -59,11 +59,13 @@ function PredictionCard({
   rank,
   activeProp,
   playerResult,
+  hrLog,
 }: {
   pred: HitterPrediction;
   rank: number;
   activeProp: PropType;
   playerResult: PlayerGameResult | null;
+  hrLog?: HrPickLog | null;
 }) {
   const { hitter, game, opposingPitcher, parkFactors, probabilities, explanations, lineupStatus } = pred;
   const explanation = explanations.find(e => e.prop === activeProp);
@@ -214,6 +216,39 @@ function PredictionCard({
               {fmt(hitter.recentStats.avg)}/{fmt(hitter.recentStats.slg)}
               {hitter.recentStats.hrCount > 0 && ` · ${hitter.recentStats.hrCount}HR`}
             </span>
+          )}
+        </div>
+      )}
+
+      {activeProp === 'hr' && hrLog && (
+        <div className="flex flex-wrap gap-1.5 text-xs mb-3">
+          <span className="stat-pill bg-slate-800 text-slate-300">
+            <span className="text-slate-500">ENV</span> ×{hrLog.envMultiplier.toFixed(2)} {hrLog.weatherLabel}
+          </span>
+          <span className="stat-pill bg-slate-800 text-slate-300">
+            <span className="text-slate-500">ORDER</span>{' '}
+            {hrLog.order != null && hrLog.order >= 1 ? `#${hrLog.order}` : 'unknown'}
+          </span>
+          <span className="stat-pill bg-slate-800 text-slate-300">
+            <span className="text-slate-500">{hrLog.contactSource === 'statcast' ? 'BARREL' : 'ISO PROXY'}</span>{' '}
+            {hrLog.contactSource === 'statcast' && hrLog.barrelPct != null
+              ? `${(hrLog.barrelPct * 100).toFixed(1)}%`
+              : hrLog.iso != null ? hrLog.iso.toFixed(3) : '—'}
+            {' · as of '}{hrLog.asOfDate}
+          </span>
+          {hrLog.xIso == null && (
+            <span className="stat-pill bg-slate-800 text-slate-500">xISO —</span>
+          )}
+          {hrLog.pitcherVuln != null && (
+            <span className="stat-pill bg-slate-800 text-slate-300">
+              <span className="text-slate-500">PITCHER</span> ×{hrLog.pitcherVuln.toFixed(2)}
+            </span>
+          )}
+          {hrLog.flags.length > 0 && (
+            <span className="stat-pill bg-slate-800 text-amber-300/90">{hrLog.flags.join(' · ')}</span>
+          )}
+          {hrLog.filterReason && (
+            <span className="stat-pill bg-red-950/60 text-red-300">{hrLog.filterReason}</span>
           )}
         </div>
       )}
@@ -1201,6 +1236,22 @@ export default function Home() {
     p => p.probabilities[activeProp] >= minProb,
   );
 
+  const hrBoard = activeProp === 'hr' ? data?.hrBoard : undefined;
+  const predictionByKey = new Map(
+    (data?.predictions ?? []).map(p => [`${p.hitter.id}:${p.game.gamePk}`, p]),
+  );
+  const hrLogByKey = new Map(
+    (hrBoard?.picks ?? []).map(p => [`${p.playerId}:${p.gamePk}`, p]),
+  );
+  const boardRows = (keys: string[]) => keys.flatMap(key => {
+    const pred = predictionByKey.get(key);
+    if (!pred || pred.probabilities.hr < minProb) return [];
+    return [{ pred, log: hrLogByKey.get(key) ?? null }];
+  });
+  const spotRows = hrBoard ? boardRows(hrBoard.spotKeys) : [];
+  const spotKeySet = new Set(hrBoard?.spotKeys ?? []);
+  const fullRows = hrBoard ? boardRows(hrBoard.fullKeys.filter(key => !spotKeySet.has(key))) : [];
+
   // Hit + Run + RBI combined score
   const hrrSorted = data
     ? [...data.predictions]
@@ -1460,8 +1511,19 @@ export default function Home() {
             <div className="flex flex-wrap items-center gap-4 mb-5 text-xs text-slate-400">
               <span>
                 <span className="text-white font-medium">{data.validatedHitters}</span> hitters validated
-                · <span className="text-white font-medium">{filteredPredictions.length}</span> shown
+                · <span className="text-white font-medium">
+                  {hrBoard
+                    ? `${hrBoard.spotKeys.length} spot · ${hrBoard.fullKeys.length} full`
+                    : filteredPredictions.length}
+                </span> shown
                 · <span className="text-white font-medium">{data.date}</span>
+                {hrBoard && (
+                  <span className="text-slate-500">
+                    {' '}· stats through {hrBoard.asOfDate} · {hrBoard.contactSource === 'proxy'
+                      ? 'ISO proxy, Statcast not wired'
+                      : hrBoard.contactSource}
+                  </span>
+                )}
               </span>
               <span className="flex items-center gap-1.5">
                 <HealthDot status={data.sourceHealth.schedule} /> Schedule
@@ -1547,7 +1609,59 @@ export default function Home() {
             </div>
           )}
 
-          {!loading && filteredPredictions.length > 0 && (
+          {!loading && hrBoard && (
+            <div className="space-y-8">
+              <section>
+                <h2 className="text-white font-semibold mb-1">Spot Board</h2>
+                <p className="text-slate-500 text-xs mb-4">
+                  Environment-first, up to 12. Empty slots are not filled from average or suppressed parks.
+                  Stats through {hrBoard.asOfDate}. {hrBoard.contactSource === 'proxy'
+                    ? 'Barrel% and xISO are blank; contact quality is an ISO proxy.'
+                    : `Contact source: ${hrBoard.contactSource}.`}
+                </p>
+                {spotRows.length === 0 ? (
+                  <div className="text-slate-400 text-sm py-6">No spot-board hitters passed the environment gate.</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {spotRows.map(({ pred, log }, i) => (
+                      <PredictionCard
+                        key={`spot-${pred.hitter.id}-${pred.game.gamePk}`}
+                        pred={pred}
+                        rank={i + 1}
+                        activeProp={activeProp}
+                        playerResult={isPastDate ? (playerResults[pred.hitter.id] ?? null) : null}
+                        hrLog={log}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+              <section>
+                <h2 className="text-white font-semibold mb-1">Full Board</h2>
+                <p className="text-slate-500 text-xs mb-4">
+                  {hrBoard.fullKeys.length} published. The list stops when the gates run out; it does not pad to 20.
+                </p>
+                {fullRows.length === 0 ? (
+                  <div className="text-slate-400 text-sm py-6">Every published hitter is already on the Spot Board.</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {fullRows.map(({ pred, log }, i) => (
+                      <PredictionCard
+                        key={`full-${pred.hitter.id}-${pred.game.gamePk}`}
+                        pred={pred}
+                        rank={spotRows.length + i + 1}
+                        activeProp={activeProp}
+                        playerResult={isPastDate ? (playerResults[pred.hitter.id] ?? null) : null}
+                        hrLog={log}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+
+          {!loading && !hrBoard && filteredPredictions.length > 0 && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {filteredPredictions.slice(0, displayCount).map((pred, i) => (

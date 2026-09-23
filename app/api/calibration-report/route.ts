@@ -80,8 +80,7 @@ export async function GET(): Promise<NextResponse> {
     const predictedAvg = picks.reduce((s, p) => s + p.predictedProbability, 0) / n;
     const actualRate = picks.filter(p => p.correct).length / n;
 
-    // HR is no longer a logit. Shifting PROP_CALIBRATION.hr.intercept would
-    // not change the ranking — that lives in scoring/hrModel.ts.
+    // The HR tab is scoring/hrBoard.ts. Shifting this intercept does not change it.
     if (prop === 'hr') {
       return {
         prop,
@@ -91,9 +90,9 @@ export async function GET(): Promise<NextResponse> {
         currentIntercept: intercept,
         currentScale: scale,
         suggestedIntercept: null,
-        note: `HR uses the plate-appearance model (scoring/hrModel.ts), not this intercept. `
+        note: `Published HR names come from scoring/hrBoard.ts, not this intercept. `
           + `Graded history predicted ${pct(predictedAvg)} and hit ${pct(actualRate)} (n=${n}). `
-          + `Retune HR_PA_PRIOR / park dampening from scripts/hr-top20-eval.mjs rather than shifting the intercept.`,
+          + `Sep 8–22 is in scripts/hr-board-eval.mjs. Do not chase a higher hit rate by moving this intercept.`,
       };
     }
 
