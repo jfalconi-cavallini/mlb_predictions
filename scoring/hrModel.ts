@@ -11,11 +11,15 @@
 // so the list is calibrated near 20% per name. Ten hits in twenty spots
 // would require those names to homer at ~50%, which this sample never
 // supported for any public-stat variant we tried (platoon splits, barrel
-// blend, pitcher HR/BF, per-game caps). A later pass treated L7/L14/L30
-// HR/PA as the observation (season rate as the prior), oriented wind and
-// temperature, a milder pitcher fly-ball adjustment, and a retuned linear
-// logit as hypotheses. None of them beat this model on both halves of
-// Sep 8–22; the linear retune landed near 3/20. See scripts/hr-top20-eval.mjs.
+// blend, pitcher HR/BF, per-game caps). A CoS retune of the old logit
+// (season HR weight ~1.35, L14 HR/PA weight ~2, recent form ~1.75, higher
+// park and weather, lineup filter) scored 3.07/20 on this window, below
+// both this model and the old 3.20 logit. Putting that same package inside
+// this formula (L14 as the observation, season rate as a 50 PA prior,
+// park×weather, extra PA for spots 1–6) scored 3.87/20 and 3.29 on the
+// second half. An extra 6% PA for spots 1–6 alone added one homer, on the
+// Sep 14 short slate; full slates stayed 4.27. Spots 1–6 already get more
+// PA from PA_BY_LINEUP_SPOT. See scripts/hr-top20-eval.mjs.
 
 export const HR_PA_PRIOR = 200;
 export const PARK_SHRINK_PA = 2200;

@@ -299,8 +299,11 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
   // Placeholder only. buildPrediction overwrites `hr` with scoring/hrModel.ts
   // (regressed HR/PA × dampened park × expected PA). Keeping the logit here
   // means scoreProbabilities() still returns a full object if called alone.
+  // Do not retune these weights to rank the HR tab. On Sep 8–22 that retune
+  // (season rate ~1.35, recent form ~1.75, an explicit L14 HR/PA term, higher
+  // park and weather) scored 3.07/20 against this model's 4.13/20.
   const hrRaw =
-    (f.hitterHRRate          * 3.0) +   // individual HR rate is the biggest predictor
+    (f.hitterHRRate          * 3.0) +   // unused for the HR board; hrModel overwrites
     (f.hitterPowerSkill      * 1.5) +   // raw power
     (f.pitcherVulnerabilityHR * 1.8) +  // pitcher gives up HRs?
     (f.parkHRFactor          * 1.2) +   // park is critical for HRs
