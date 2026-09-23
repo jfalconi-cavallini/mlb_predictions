@@ -1056,7 +1056,10 @@ export default function Home() {
   const [activeView, setActiveView] = useState<ActiveView>('hr');
   const [showRejected, setShowRejected] = useState(false);
   const [minProb, setMinProb] = useState(0);
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayET());
+  // Empty until mount. Computing "today" during SSR freezes the date input at
+  // whatever day the page was rendered (production HTML was stuck on 2026-07-10).
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [today, setToday] = useState<string>('');
   const [displayCount, setDisplayCount] = useState(20);
   const [trackRecordData, setTrackRecordData] = useState<TrackRecordAPIResponse | null>(null);
   const [trackRecordLoading, setTrackRecordLoading] = useState(false);
@@ -1065,9 +1068,8 @@ export default function Home() {
   const [calibrationLoading, setCalibrationLoading] = useState(false);
   const [showCalibration, setShowCalibration] = useState(false);
 
-  const today = getTodayET();
-  const isToday = selectedDate === today;
-  const isPastDate = selectedDate < today;
+  const isToday = today !== '' && selectedDate === today;
+  const isPastDate = today !== '' && selectedDate !== '' && selectedDate < today;
 
   // Derived flags
   const isGamesView = activeView === 'games';
@@ -1152,14 +1154,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const t = getTodayET();
+    setToday(t);
+    setSelectedDate(current => current || t);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedDate) return;
     loadPredictions(selectedDate);
     loadGamePredictions(selectedDate);
-    if (selectedDate < getTodayET()) {
+    if (today && selectedDate < today) {
       loadHrResults(selectedDate);
     } else {
       setPlayerResults({});
     }
-  }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate]);
+  }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate, today]);
 
   useEffect(() => {
     if ((isTrackRecordView || isBestBetsView) && !trackRecordData && !trackRecordLoading) {
@@ -1176,7 +1185,7 @@ export default function Home() {
   useEffect(() => { setDisplayCount(20); }, [activeView]);
 
   function goToDate(date: string) {
-    if (date > today) return;
+    if (!date || (today && date > today)) return;
     setSelectedDate(date);
     setData(null);
     setGameData(null);
@@ -1220,7 +1229,7 @@ export default function Home() {
         <div className="flex items-center gap-2 mb-5">
           <button
             onClick={() => goToDate(offsetDate(selectedDate, -1))}
-            disabled={loading}
+            disabled={loading || !selectedDate}
             className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
             aria-label="Previous day"
           >
@@ -1229,19 +1238,20 @@ export default function Home() {
           <input
             type="date"
             value={selectedDate}
-            max={today}
+            max={today || undefined}
+            disabled={!selectedDate}
             onChange={e => { if (e.target.value) goToDate(e.target.value); }}
             className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-slate-600"
           />
           <button
             onClick={() => goToDate(offsetDate(selectedDate, 1))}
-            disabled={loading || isToday}
+            disabled={loading || !selectedDate || isToday}
             className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
             aria-label="Next day"
           >
             ›
           </button>
-          <span className="text-slate-400 text-sm">{formatDisplayDate(selectedDate)}</span>
+          <span className="text-slate-400 text-sm">{selectedDate ? formatDisplayDate(selectedDate) : 'Loading date…'}</span>
           {!isToday && (
             <button
               onClick={() => goToDate(today)}

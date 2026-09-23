@@ -15,6 +15,7 @@ import {
   HitterPrediction, MLBGame, ConfidenceTier, PropType
 } from '../types';
 import { explainHomeRun, expectedPlateAppearances, homeRunProbability, HomeRunInput } from './hrModel';
+import { classifyWind } from '../lib/wind';
 
 // ─── LOGISTIC SIGMOID ────────────────────────────────────────────────────────
 
@@ -202,29 +203,19 @@ export function extractFeatures(
     // Below 60°F: penalty. 60–70: neutral. 70–80: slight boost. 80+: good boost.
     const tempBoost = clamp((weather.tempF - 60) / 35, 0, 1) * 0.3;
 
-    // Wind: determine if wind blows "out" (favorable) or "in" (unfavorable)
-    // Wind blowing toward CF (180° ± 45°) = pitchers park
-    // Wind blowing from CF (0° ± 45°) = hitters park
-    // Left-right (90° or 270°) = moderate boost for opposite field hitters
-    const windDeg = weather.windDirectionDeg % 360;
+    // Wind out = blowing toward this park's center field, not "from the north".
+    const wind = classifyWind(park.venueId, weather.windDirectionDeg, weather.windSpeedMph, false);
     const windMph = weather.windSpeedMph;
 
     let windBoost = 0;
-    if (windMph >= 10) {
-      // Wind out to CF (from home plate perspective) = big boost
-      if (windDeg >= 315 || windDeg <= 45) {
-        windBoost = clamp((windMph - 8) / 15, 0, 0.4);
-        windFavorable = true;
-      }
-      // Wind in from CF = penalty
-      else if (windDeg >= 135 && windDeg <= 225) {
-        windBoost = -clamp((windMph - 8) / 15, 0, 0.3);
-      }
-      // Crosswind = small boost (balls carry to gaps)
-      else {
-        windBoost = clamp((windMph - 8) / 30, 0, 0.15);
-        windFavorable = windMph >= 15;
-      }
+    if (windMph >= 10 && wind.kind === 'out') {
+      windBoost = clamp((windMph - 8) / 15, 0, 0.4);
+      windFavorable = true;
+    } else if (windMph >= 10 && wind.kind === 'in') {
+      windBoost = -clamp((windMph - 8) / 15, 0, 0.3);
+    } else if (windMph >= 10 && wind.kind === 'cross') {
+      windBoost = clamp((windMph - 8) / 30, 0, 0.15);
+      windFavorable = windMph >= 15;
     }
 
     // Altitude already captured in park factor, but Coors is so extreme add extra

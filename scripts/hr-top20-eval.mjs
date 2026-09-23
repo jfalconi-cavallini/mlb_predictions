@@ -197,9 +197,7 @@ function oldHrScore(p) {
   return sigmoid((raw - 11.41) * 0.557);
 }
 
-function newHrScore(p, leagueHrPa) {
-  const poolEligible = p.lineupKnown ? p.lineupSpot >= 1 : true;
-  if (!poolEligible) return -1;
+function newHrProb(p, leagueHrPa) {
   return homeRunProbability({
     hr: p.season?.hr ?? 0,
     pa: p.season?.pa ?? 0,
@@ -211,12 +209,28 @@ function newHrScore(p, leagueHrPa) {
   });
 }
 
-function topHits(rows, scoreFn) {
-  const top = [...rows].sort((a, b) => scoreFn(b) - scoreFn(a)).slice(0, 20);
+function newHrScore(p, leagueHrPa) {
+  const poolEligible = p.lineupKnown ? p.lineupSpot >= 1 : true;
+  if (!poolEligible) return -1;
+  return newHrProb(p, leagueHrPa);
+}
+
+function topHits(rows, scoreFn, probFn = scoreFn) {
+  const ranked = [...rows].sort((a, b) => scoreFn(b) - scoreFn(a));
+  const top = ranked.slice(0, 20);
+  const top10 = ranked.slice(0, 10);
+  const playedRows = rows.filter(r => r.played);
+  let brier = 0;
+  for (const r of playedRows) {
+    const p = clamp(probFn(r), 0, 1);
+    brier += (p - (r.homered ? 1 : 0)) ** 2;
+  }
   return {
     homers: top.filter(r => r.homered).length,
+    top10: top10.filter(r => r.homered).length,
     played: top.filter(r => r.played).length,
     ev: top.reduce((s, r) => s + Math.max(0, scoreFn(r)), 0),
+    brier: playedRows.length ? brier / playedRows.length : 0,
   };
 }
 
@@ -365,7 +379,11 @@ for (const date of DATES) {
   const slate = await loadDate(date);
   if (!slate) continue;
   const old = topHits(slate.rows, oldHrScore);
-  const neu = topHits(slate.rows, (r) => newHrScore(r, slate.leagueHrPa));
+  const neu = topHits(
+    slate.rows,
+    (r) => newHrScore(r, slate.leagueHrPa),
+    (r) => newHrProb(r, slate.leagueHrPa),
+  );
   days.push({ date, games: slate.games, old, neu });
   console.log(`${date}  games=${String(slate.games).padStart(2)}  old ${old.homers}/20 (played ${old.played})   new ${neu.homers}/20 (played ${neu.played})  newEV ${neu.ev.toFixed(1)}`);
 }
@@ -380,5 +398,5 @@ function avgFull(pick) {
 
 console.log('\nTop-20 hitters who homered, 2026-09-08 through 2026-09-22');
 console.log(`days=${days.length}  full slates (12+ games)=${full.length}`);
-console.log(`old model     ${avg('old', 'homers').toFixed(2)}/20   full-slate ${avgFull('old').toFixed(2)}/20   played ${avg('old', 'played').toFixed(1)}/20`);
-console.log(`new model     ${avg('neu', 'homers').toFixed(2)}/20   full-slate ${avgFull('neu').toFixed(2)}/20   played ${avg('neu', 'played').toFixed(1)}/20   mean predicted sum ${avg('neu', 'ev').toFixed(2)}`);
+console.log(`old model     ${avg('old', 'homers').toFixed(2)}/20   top10 ${avg('old', 'top10').toFixed(2)}/10   full-slate ${avgFull('old').toFixed(2)}/20   played ${avg('old', 'played').toFixed(1)}/20   brier ${avg('old', 'brier').toFixed(4)}`);
+console.log(`new model     ${avg('neu', 'homers').toFixed(2)}/20   top10 ${avg('neu', 'top10').toFixed(2)}/10   full-slate ${avgFull('neu').toFixed(2)}/20   played ${avg('neu', 'played').toFixed(1)}/20   brier ${avg('neu', 'brier').toFixed(4)}   mean predicted sum ${avg('neu', 'ev').toFixed(2)}`);

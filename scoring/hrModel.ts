@@ -11,7 +11,11 @@
 // so the list is calibrated near 20% per name. Ten hits in twenty spots
 // would require those names to homer at ~50%, which this sample never
 // supported for any public-stat variant we tried (platoon splits, barrel
-// blend, pitcher HR/BF, per-game caps). See scripts/hr-top20-eval.mjs.
+// blend, pitcher HR/BF, per-game caps). A later pass treated L7/L14/L30
+// HR/PA as the observation (season rate as the prior), oriented wind and
+// temperature, a milder pitcher fly-ball adjustment, and a retuned linear
+// logit as hypotheses. None of them beat this model on both halves of
+// Sep 8–22; the linear retune landed near 3/20. See scripts/hr-top20-eval.mjs.
 
 export const HR_PA_PRIOR = 200;
 export const PARK_SHRINK_PA = 2200;
