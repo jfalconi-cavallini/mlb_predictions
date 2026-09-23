@@ -28,11 +28,11 @@ function tierClass(tier: ConfidenceTier): string {
 }
 
 function probBarColor(prob: number): string {
-  // Thresholds match the (post-2026-07-10 recalibration) HR ELITE/STRONG/VALUE
-  // cutoffs — Hit/Run/RBI probabilities always clear the top bucket already.
-  if (prob >= 0.065) return 'bg-yellow-400';
-  if (prob >= 0.039) return 'bg-green-500';
-  if (prob >= 0.021) return 'bg-blue-500';
+  // HR ELITE/STRONG/VALUE cutoffs from scoring/engine.ts (20% / 16% / 13%).
+  // Hit/Run/RBI probabilities still clear the top bucket.
+  if (prob >= 0.20) return 'bg-yellow-400';
+  if (prob >= 0.16) return 'bg-green-500';
+  if (prob >= 0.13) return 'bg-blue-500';
   return 'bg-slate-600';
 }
 
@@ -128,7 +128,7 @@ function PredictionCard({
       <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${probBarColor(prob)}`}
-          style={{ width: `${Math.min(prob * (activeProp === 'hr' ? 20 : 6), 1) * 100}%` }}
+          style={{ width: `${Math.min(prob * (activeProp === 'hr' ? 4 : 6), 1) * 100}%` }}
         />
       </div>
 
@@ -1422,9 +1422,9 @@ export default function Home() {
                 <option value={0}>All</option>
                 {activeProp === 'hr' ? (
                   <>
-                    <option value={0.02}>2%+</option>
-                    <option value={0.04}>4%+</option>
-                    <option value={0.065}>6.5%+</option>
+                    <option value={0.13}>13%+</option>
+                    <option value={0.16}>16%+</option>
+                    <option value={0.20}>20%+</option>
                   </>
                 ) : (
                   <>

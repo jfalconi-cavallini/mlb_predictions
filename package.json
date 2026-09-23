@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node tests/validation.test.js && node tests/grading.test.js"
+    "test": "node tests/validation.test.js && node tests/grading.test.js && node --experimental-strip-types --test tests/hrModel.test.mjs",
+    "eval:hr": "node --experimental-strip-types scripts/hr-top20-eval.mjs"
   },
   "dependencies": {
     "next": "^15.3.0",

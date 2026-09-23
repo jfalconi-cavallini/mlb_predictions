@@ -14,6 +14,7 @@ import {
   FeatureVector, PropProbabilities, PropExplanation,
   HitterPrediction, MLBGame, ConfidenceTier, PropType
 } from '../types';
+import { explainHomeRun, expectedPlateAppearances, homeRunProbability, HomeRunInput } from './hrModel';
 
 // ─── LOGISTIC SIGMOID ────────────────────────────────────────────────────────
 
@@ -47,7 +48,10 @@ export const PROP_CONFIDENCE_THRESHOLDS: Record<PropType, [number, number, numbe
   hit: [0.72, 0.68, 0.64],
   run: [0.38, 0.33, 0.28],
   rbi: [0.30, 0.25, 0.20],
-  hr:  [0.065, 0.039, 0.021],
+  // HR tiers are on the plate-appearance model's scale (scoring/hrModel.ts).
+  // A typical starter is ~12%. The Sep 2026 top 20 averaged ~20% and homered
+  // at that rate, so ELITE starts at 20% rather than the old 6.5% logit cutoff.
+  hr:  [0.20, 0.16, 0.13],
 };
 
 // Convert raw score to probability. The intercept and scale are chosen so that:
@@ -301,11 +305,9 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
   const rbi = scoreToProbability(rbiRaw, PROP_CALIBRATION.rbi.intercept, PROP_CALIBRATION.rbi.scale);
 
   // ── HR PROBABILITY ────────────────────────────────────────────────────────
-  // Probability of hitting at least 1 HR in the game.
-  // Original design target was avg MLB player ~6%, elite power ~30% (see intercept
-  // history above) — but graded outcomes showed the model was over-calling HR by
-  // ~3x, so post-2026-07-10 recalibration these run lower: avg player raw ≈ 3.96 →
-  // ~1.6%, elite raw ≈ 7.38 → ~9.6%. Matches what ELITE tier was actually hitting.
+  // Placeholder only. buildPrediction overwrites `hr` with scoring/hrModel.ts
+  // (regressed HR/PA × dampened park × expected PA). Keeping the logit here
+  // means scoreProbabilities() still returns a full object if called alone.
   const hrRaw =
     (f.hitterHRRate          * 3.0) +   // individual HR rate is the biggest predictor
     (f.hitterPowerSkill      * 1.5) +   // raw power
@@ -410,10 +412,27 @@ export function buildPrediction(
   opposingPitcher: MLBPitcher | null,
   park: ParkFactors,
   weather: WeatherConditions | null,
+  hrInput?: HomeRunInput,
 ): HitterPrediction {
   const features = extractFeatures(hitter, opposingPitcher, park, weather);
   const probabilities = scoreProbabilities(features);
   const explanations = generateExplanations(features, probabilities, hitter, opposingPitcher, park, weather);
+
+  if (hrInput) {
+    const hr = homeRunProbability(hrInput);
+    probabilities.hr = hr;
+    const hrExpl = explanations.find(e => e.prop === 'hr');
+    if (hrExpl) {
+      hrExpl.probability = hr;
+      hrExpl.confidence = getConfidenceTier(hr, 'hr');
+      hrExpl.keyDrivers = explainHomeRun(hrInput);
+      hrExpl.featureContributions = {
+        hrPerPa: hrInput.pa > 0 ? hrInput.hr / hrInput.pa : 0,
+        expectedPa: expectedPlateAppearances(hrInput),
+        parkFactor: hrInput.parkFactor,
+      };
+    }
+  }
 
   return {
     hitter,

@@ -10,6 +10,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchTodaysGames } from '../../../lib/mlbApi';
 import { validateAndBuildHitterPool } from '../../../lib/validation';
 import { buildPrediction } from '../../../scoring/engine';
+import { loadHrSlateContext } from '../../../lib/hrContext';
+import { HomeRunInput, LEAGUE_HR_PA_FALLBACK } from '../../../scoring/hrModel';
 import { getParkFactors } from '../../../lib/parkFactors';
 import { fetchWeather } from '../../../lib/weather';
 import { getCachedPredictions, savePredictions } from '../../../lib/cache';
@@ -77,9 +79,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     teamGameObjMap.set(game.awayTeam.id, game);
   }
 
-  // ── STEP 3: Validate hitters ─────────────────────────────────────────────
+  // ── STEP 3: Validate hitters, and load point-in-time HR context in parallel
   const seenIds = new Set<number>();
-  const validationResult = await validateAndBuildHitterPool(todaysTeamIds, teamGameMap, seenIds);
+  const [validationResult, hrLoaded] = await Promise.all([
+    validateAndBuildHitterPool(todaysTeamIds, teamGameMap, seenIds, date),
+    loadHrSlateContext(date),
+  ]);
+  const hrCtx = hrLoaded.ctx;
+  warnings.push(...hrLoaded.warnings);
   warnings.push(...validationResult.rejected
     .filter(r => r.reason !== 'NOT_A_HITTER') // pitchers filtered silently
     .slice(0, 5) // don't flood warnings
@@ -115,7 +122,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const parkFactors = getParkFactors(game.venue.id, game.venue.name);
     const weather = weatherMap.get(game.gamePk) ?? null;
 
-    const prediction = buildPrediction(hitter, game, opposingPitcher, parkFactors, weather);
+    const lineupIds = isHome ? game.homeLineupIds : game.awayLineupIds;
+    const lineupKnown = lineupIds.length >= 8;
+    const lineupIdx = lineupIds.indexOf(hitter.id);
+    if (lineupKnown && lineupIdx >= 0) {
+      hitter.validationMeta.lineupStatus = 'CONFIRMED';
+    }
+    const counted = hrCtx.hitting.get(hitter.id);
+    const seasonPa = counted?.pa ?? hitter.seasonStats?.paCount ?? 0;
+    const seasonHr = counted
+      ? counted.hr
+      : (hitter.seasonStats ? hitter.seasonStats.hrRate * hitter.seasonStats.paCount : 0);
+    const hrInput: HomeRunInput = {
+      hr: seasonHr,
+      pa: seasonPa,
+      leagueHrPa: hrCtx.leagueHrPa || LEAGUE_HR_PA_FALLBACK,
+      parkFactor: hrCtx.parkByHomeTeam.get(game.homeTeam.id) ?? 1,
+      teamGames: hrCtx.teamGames.get(hitter.team.id) ?? 0,
+      lineupKnown,
+      lineupSpot: lineupKnown ? (lineupIdx >= 0 ? lineupIdx + 1 : 0) : null,
+    };
+
+    const prediction = buildPrediction(hitter, game, opposingPitcher, parkFactors, weather, hrInput);
     predictions.push(prediction);
   }
 
