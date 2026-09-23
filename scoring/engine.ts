@@ -296,12 +296,11 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
   const rbi = scoreToProbability(rbiRaw, PROP_CALIBRATION.rbi.intercept, PROP_CALIBRATION.rbi.scale);
 
   // ── HR PROBABILITY ────────────────────────────────────────────────────────
-  // Placeholder only. buildPrediction overwrites `hr` with scoring/hrModel.ts
-  // (regressed HR/PA × dampened park × expected PA). Keeping the logit here
-  // means scoreProbabilities() still returns a full object if called alone.
-  // Do not retune these weights to rank the HR tab. On Sep 8–22 that retune
-  // (season rate ~1.35, recent form ~1.75, an explicit L14 HR/PA term, higher
-  // park and weather) scored 3.07/20 against this model's 4.13/20.
+  // Placeholder only. buildPrediction overwrites `hr` with the plate-appearance
+  // model in scoring/hrModel.ts (regressed HR/PA × dampened park × expected PA).
+  // Do not retune these weights, and do not swap in the spot ranker
+  // (hand split × starter HR/BF × barrels × wind). On Sep 8–22 that spot
+  // ranker scored 3.53–4.00/20 against this model's 4.13/20. See hrModel.ts.
   const hrRaw =
     (f.hitterHRRate          * 3.0) +   // unused for the HR board; hrModel overwrites
     (f.hitterPowerSkill      * 1.5) +   // raw power

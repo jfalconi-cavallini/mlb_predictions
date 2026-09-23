@@ -204,6 +204,23 @@ q = regressed season HR/PA × sqrt(2026 park factor)
 
 Season HR/PA is shrunk toward the league rate with a 200-PA prior. Expected PA comes from the posted batting-order slot when a lineup is up, from season playing time when it is not, and is near zero for a confirmed non-starter. The park factor is the team's own 2026 home-vs-road HR rate, square-root dampened. `npm run eval:hr` replays Sep 8–22: the previous logit was 3.20/20, this model is 4.13/20 (top 10: 2.07/10). Rolling HR/PA, oriented wind, and a retuned copy of the weights above did not beat that on the later half of the window.
 
+### Why the top 20 is not 10/20
+
+A second ranker, `spotHomeRunProbability()` in `scoring/hrModel.ts`, scores the same slate as a matchup instead of a season total: HR/PA versus today's pitcher hand, times the starter's regressed HR per batter faced (65% starter, 35% league, because the bullpen sees the rest of the game), times the same dampened park and expected PA. Two extensions were specified before the Sep 8–22 numbers were opened: blend half of that rate with a point-in-time barrel rate (play-by-play, barrel zone frozen, HR-per-barrel measured only on games through June 30), and add last-45-day HR/PA plus wind and temperature. Stats end the day before the slate. Season-to-date Statcast leaderboards were not used.
+
+| Board | Jul 1–Sep 7 (66 days) | Sep 8–22 (15 days) | Sep 8–22 top 10 |
+|---|---|---|---|
+| Live model (season HR/PA × park × PA) | 3.58/20 | **4.13/20** | **2.07/10** |
+| Matchup (hand × starter × park) | 3.64/20 | 3.53/20 | 2.40/10 |
+| Contact (matchup + barrels) | 3.56/20 | 4.00/20 | 2.07/10 |
+| Spot (contact + last 45 days + weather) | 3.64/20 | 3.67/20 | 1.93/10 |
+
+The Sep 8–22 baseline matches the previously published 4.13/20, so the harness is the same one. The new boards were not promoted. On that window the players they added homered less often than the players they removed (matchup: 12.9% vs 21.8%).
+
+The gap to 10/20 is the base rate, not a missing weight. From Jul 1 through Sep 7, about 28 hitters homered on a typical day. Among hitters with at least 150 PA, the top fifth by regressed HR/PA homered in 16.9% of games they played and the bottom fifth in 8.0%. The live top 20 homered in 17.9% of those chances; ranks 21–40 were close behind, so reordering the elite group does not uncover a 50% pocket. Inside that top 40, a better hand split was 17.5% vs 16.6%, a hot 45 days was 17.1% vs 16.8%, and weather at 1.05× or better was 16.6% vs 17.2%. Starter HR rate, worst fifth to best fifth, was 11.4% to 13.1% overall and only about 16% to 18% inside the best hitters. Re-ranking the baseline top 30 by barrel rate moved the dev window from 3.58/20 to 3.62/20. Capping how many hitters come from one game made it worse.
+
+The live top 20 stays on `homeRunProbability()`. Cards still list regressed HR rate, expected PA, and the 2026 park factor. `npm run eval:hr:spot` replays the table above after `node scripts/build-contact-cache.mjs` has cached play-by-play barrels under `/tmp/hr-contact`.
+
 **Hit probability weights:**
 ```
 hitterContactSkill         × 2.2
@@ -511,7 +528,7 @@ When data is unavailable (pitcher not yet announced, weather API unavailable, ea
 
 ## Known Limitations and Next Steps
 
-**Statcast metrics not in the HR ranker** — xwOBA, barrel%, hard-hit%, and exit velocity stay `null`. The Stats API does not serve them. A season-long Savant barrel% blend, joined by player id, did not raise the Sep 8–22 top-20 hit rate on the later dates, so it is not wired in. A point-in-time Statcast feed is still worth testing; a full-season rate is not a free upgrade.
+**Statcast metrics not in the HR ranker** — xwOBA, barrel%, hard-hit%, and exit velocity stay `null` on the player payload. The Stats API does not serve them. A point-in-time barrel rate from play-by-play (not a season-to-date Savant file) was blended into a matchup model and scored 4.00/20 on Sep 8–22 against the live model's 4.13/20, so it is not the board. See the HR section above.
 
 **Lineups when posted** — the schedule hydrate includes batting orders. Starters are marked `CONFIRMED` and the HR model uses their slot. Games without a posted lineup still fall back to season playing time.
 

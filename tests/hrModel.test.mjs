@@ -6,6 +6,10 @@ import {
   dampenedParkFactor,
   empiricalParkFactor,
   expectedPlateAppearances,
+  spotHomeRunProbability,
+  pitcherHrMultiplier,
+  weatherHrMultiplier,
+  handAdjustedHrRate,
 } from '../scoring/hrModel.ts';
 
 const league = 0.0306;
@@ -74,6 +78,60 @@ test('empirical park factor shrinks a thin Coors-style gap toward 1', () => {
   assert.ok(factor > 1);
   assert.ok(factor < 1.15, `factor ${factor} should not recreate the stale 1.38 Coors weight`);
   assert.equal(empiricalParkFactor(10, 100, 10, 100, league), null);
+});
+
+test('neutral matchup spot rate matches the season-rate model', () => {
+  const base = homeRunProbability(input());
+  const spot = spotHomeRunProbability(input(), 'matchup');
+  assert.ok(Math.abs(base - spot) < 1e-12, `base ${base} spot ${spot}`);
+});
+
+test('a homer-prone starter raises matchup probability', () => {
+  const neutral = spotHomeRunProbability(input(), 'matchup');
+  const soft = spotHomeRunProbability(input({
+    pitcherHr: 28,
+    pitcherBf: 700,
+  }), 'matchup');
+  const stingy = spotHomeRunProbability(input({
+    pitcherHr: 8,
+    pitcherBf: 700,
+  }), 'matchup');
+  assert.ok(soft > neutral);
+  assert.ok(stingy < neutral);
+  assert.ok(pitcherHrMultiplier(28, 700, league) > 1);
+  assert.ok(pitcherHrMultiplier(null, null, league) === 1);
+});
+
+test('hand split moves the rate toward the matchup sample', () => {
+  const vsLeft = handAdjustedHrRate(30, 600, 2, 120, league);
+  const vsRight = handAdjustedHrRate(30, 600, 28, 480, league);
+  assert.ok(vsLeft < vsRight);
+  const bad = spotHomeRunProbability(input({ handHr: 2, handPa: 120 }), 'matchup');
+  const good = spotHomeRunProbability(input({ handHr: 28, handPa: 480 }), 'matchup');
+  assert.ok(good > bad);
+});
+
+test('wind out raises the spot model and a dome does not', () => {
+  const calm = spotHomeRunProbability(input({ tempF: 70, windMph: 0, windOutComponent: 0 }), 'spot');
+  const out = spotHomeRunProbability(input({ tempF: 85, windMph: 18, windOutComponent: 1 }), 'spot');
+  const dome = spotHomeRunProbability(input({
+    tempF: 95, windMph: 20, windOutComponent: 1, suppressWeather: true,
+  }), 'spot');
+  assert.ok(out > calm);
+  assert.ok(Math.abs(dome - calm) < 1e-9);
+  assert.ok(weatherHrMultiplier(85, 18, 1, false) > 1);
+  assert.equal(weatherHrMultiplier(95, 20, 1, true), 1);
+});
+
+test('extra barrels raise contact probability above the raw HR rate', () => {
+  const raw = spotHomeRunProbability(input(), 'contact');
+  const barrels = spotHomeRunProbability(input({
+    barrels: 70,
+    barrelPa: 600,
+    leagueBarrelPa: 0.049,
+    hrPerBarrel: 2940 / 4783,
+  }), 'contact');
+  assert.ok(barrels > raw, `barrels ${barrels} raw ${raw}`);
 });
 
 test('probabilities stay in a single-game range', () => {
