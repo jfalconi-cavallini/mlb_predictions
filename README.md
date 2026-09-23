@@ -195,18 +195,14 @@ P(prop) = clamp(sigmoid((Σ weight_i × feature_i + intercept) × scale), 0.01, 
 
 The intercept and scale are calibrated so realistic baseline probabilities match known MLB single-game averages.
 
-**HR probability weights:**
+**HR probability** is not that logit. `buildPrediction` overwrites it with `scoring/hrModel.ts`:
+
 ```
-hitterHRRate          × 3.0   ← strongest predictor
-pitcherVulnerabilityHR × 1.8
-hitterPowerSkill      × 1.5
-parkHRFactor          × 1.2
-weatherHRBoost        × 1.0
-hitterPlatoonEdge     × 0.6
-hitterRecentForm      × 0.4
-Intercept: -4.5, Scale: 0.75
-→ Average MLB hitter = ~5% HR/game (realistic: 30 HR/600 PA ÷ 162 games ≈ 4.9%)
+P(at least one HR) = 1 - (1 - q) ^ expectedPA
+q = regressed season HR/PA × sqrt(2026 park factor)
 ```
+
+Season HR/PA is shrunk toward the league rate with a 200-PA prior. Expected PA comes from the posted batting-order slot when a lineup is up, from season playing time when it is not, and is near zero for a confirmed non-starter. The park factor is the team's own 2026 home-vs-road HR rate, square-root dampened. `npm run eval:hr` replays Sep 8–22: the previous logit was 3.20/20, this model is 4.13/20 (top 10: 2.07/10). Rolling HR/PA, oriented wind, and a retuned copy of the weights above did not beat that on the later half of the window.
 
 **Hit probability weights:**
 ```
@@ -456,10 +452,7 @@ Uses [Open-Meteo](https://open-meteo.com/) — free, no API key, high-accuracy h
 
 Every MLB venue has a hardcoded coordinate table (lat/lon). Fetches hourly data for temperature (°F), relative humidity, wind speed (mph), and wind direction (degrees). Selects the hour closest to game start time.
 
-Wind direction interpretation relative to standard ballpark orientation:
-- **0°–45° / 315°–360°** (out to CF): strong HR and runs boost — ball carries toward the outfield seats
-- **135°–225°** (in from CF): HR penalty — wall of air pushing back toward the infield
-- **45°–135° / 225°–315°** (crosswind): moderate boost — balls carry into the gaps
+Wind direction is meteorological (where the wind comes from), compared with each park's center-field azimuth. "Out to CF" means the wind is blowing toward that park's CF, not "from the north at every stadium." Parks with no stored azimuth (retractable roofs without an open-air bearing, indoor venues) stay neutral. Indoor venues (Rogers Centre, Tropicana Field) skip the forecast.
 
 Temperature effect: below 60°F = penalty, 60–70°F = neutral, 70–80°F = slight boost, 80°F+ = meaningful boost (ball carries further in heat).
 
@@ -518,15 +511,15 @@ When data is unavailable (pitcher not yet announced, weather API unavailable, ea
 
 ## Known Limitations and Next Steps
 
-**Statcast metrics not available** — xwOBA, barrel%, hard-hit%, and exit velocity are nullable fields in the type system but always `null` in practice. The MLB Stats API standard endpoints don't expose Statcast data. Adding a Baseball Savant scraper would be the single highest-impact improvement to prediction accuracy.
+**Statcast metrics not in the HR ranker** — xwOBA, barrel%, hard-hit%, and exit velocity stay `null`. The Stats API does not serve them. A season-long Savant barrel% blend, joined by player id, did not raise the Sep 8–22 top-20 hit rate on the later dates, so it is not wired in. A point-in-time Statcast feed is still worth testing; a full-season rate is not a free upgrade.
 
-**Pre-lineup only** — confirmed batting orders are typically posted 3–4 hours before first pitch. All predictions are marked `PRE_LINEUP`. Adding a lineup polling loop (MLB `/api/v1/game/{gamePk}/lineups`) would let the system update `lineupStatus` to `CONFIRMED` and re-weight predictions for order position.
+**Lineups when posted** — the schedule hydrate includes batting orders. Starters are marked `CONFIRMED` and the HR model uses their slot. Games without a posted lineup still fall back to season playing time.
 
 **Pitcher FIP/xFIP not in public MLB API** — the model uses ERA and WHIP as pitcher quality signals. FIP (Fielding Independent Pitching) and xFIP are better predictors of true pitcher skill but require FanGraphs or a Statcast endpoint.
 
 **No trained weights** — feature weights are manually calibrated, not fitted on historical data. The natural next step is: build a feature pipeline over 2023–2025 game logs, export feature vectors + actual outcomes (hit/no hit, HR/no HR), fit a logistic regression or XGBoost model, replace the hardcoded weights with trained coefficients, and evaluate using Brier score / log loss.
 
-**No lineup position** — batting order position significantly affects run and RBI probability. A leadoff hitter scores more runs; a cleanup hitter drives in more. This signal is absent until lineup confirmation is integrated.
+**Lineup slot is HR-only** — batting order changes expected PA in the HR model. Run and RBI scores still do not use the slot.
 
 ---
 
@@ -545,6 +538,9 @@ Open `http://localhost:3000`. No environment variables required. All external AP
 ```bash
 # Type-check without building
 npx tsc --noEmit
+
+# Replay the HR top-20 backtest (needs network; caches under /tmp/hrbt-cache)
+npm run eval:hr
 
 # Run validation regression tests at runtime
 curl http://localhost:3000/api/validate

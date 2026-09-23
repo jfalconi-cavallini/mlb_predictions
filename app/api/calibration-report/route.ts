@@ -79,6 +79,24 @@ export async function GET(): Promise<NextResponse> {
 
     const predictedAvg = picks.reduce((s, p) => s + p.predictedProbability, 0) / n;
     const actualRate = picks.filter(p => p.correct).length / n;
+
+    // HR is no longer a logit. Shifting PROP_CALIBRATION.hr.intercept would
+    // not change the ranking — that lives in scoring/hrModel.ts.
+    if (prop === 'hr') {
+      return {
+        prop,
+        sampleSize: n,
+        predictedAvgProbability: predictedAvg,
+        actualHitRate: actualRate,
+        currentIntercept: intercept,
+        currentScale: scale,
+        suggestedIntercept: null,
+        note: `HR uses the plate-appearance model (scoring/hrModel.ts), not this intercept. `
+          + `Graded history predicted ${pct(predictedAvg)} and hit ${pct(actualRate)} (n=${n}). `
+          + `Retune HR_PA_PRIOR / park dampening from scripts/hr-top20-eval.mjs rather than shifting the intercept.`,
+      };
+    }
+
     const suggestedIntercept = intercept + (logit(actualRate) - logit(predictedAvg)) / scale;
     const gap = actualRate - predictedAvg;
     const direction = gap > 0 ? 'under-calling' : 'over-calling';

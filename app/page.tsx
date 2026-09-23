@@ -28,11 +28,11 @@ function tierClass(tier: ConfidenceTier): string {
 }
 
 function probBarColor(prob: number): string {
-  // Thresholds match the (post-2026-07-10 recalibration) HR ELITE/STRONG/VALUE
-  // cutoffs — Hit/Run/RBI probabilities always clear the top bucket already.
-  if (prob >= 0.065) return 'bg-yellow-400';
-  if (prob >= 0.039) return 'bg-green-500';
-  if (prob >= 0.021) return 'bg-blue-500';
+  // HR ELITE/STRONG/VALUE cutoffs from scoring/engine.ts (20% / 16% / 13%).
+  // Hit/Run/RBI probabilities still clear the top bucket.
+  if (prob >= 0.20) return 'bg-yellow-400';
+  if (prob >= 0.16) return 'bg-green-500';
+  if (prob >= 0.13) return 'bg-blue-500';
   return 'bg-slate-600';
 }
 
@@ -128,7 +128,7 @@ function PredictionCard({
       <div className="h-1.5 bg-slate-800 rounded-full mb-3 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${probBarColor(prob)}`}
-          style={{ width: `${Math.min(prob * (activeProp === 'hr' ? 20 : 6), 1) * 100}%` }}
+          style={{ width: `${Math.min(prob * (activeProp === 'hr' ? 4 : 6), 1) * 100}%` }}
         />
       </div>
 
@@ -1056,7 +1056,10 @@ export default function Home() {
   const [activeView, setActiveView] = useState<ActiveView>('hr');
   const [showRejected, setShowRejected] = useState(false);
   const [minProb, setMinProb] = useState(0);
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayET());
+  // Empty until mount. Computing "today" during SSR freezes the date input at
+  // whatever day the page was rendered (production HTML was stuck on 2026-07-10).
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [today, setToday] = useState<string>('');
   const [displayCount, setDisplayCount] = useState(20);
   const [trackRecordData, setTrackRecordData] = useState<TrackRecordAPIResponse | null>(null);
   const [trackRecordLoading, setTrackRecordLoading] = useState(false);
@@ -1065,9 +1068,8 @@ export default function Home() {
   const [calibrationLoading, setCalibrationLoading] = useState(false);
   const [showCalibration, setShowCalibration] = useState(false);
 
-  const today = getTodayET();
-  const isToday = selectedDate === today;
-  const isPastDate = selectedDate < today;
+  const isToday = today !== '' && selectedDate === today;
+  const isPastDate = today !== '' && selectedDate !== '' && selectedDate < today;
 
   // Derived flags
   const isGamesView = activeView === 'games';
@@ -1152,14 +1154,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const t = getTodayET();
+    setToday(t);
+    setSelectedDate(current => current || t);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedDate) return;
     loadPredictions(selectedDate);
     loadGamePredictions(selectedDate);
-    if (selectedDate < getTodayET()) {
+    if (today && selectedDate < today) {
       loadHrResults(selectedDate);
     } else {
       setPlayerResults({});
     }
-  }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate]);
+  }, [loadPredictions, loadGamePredictions, loadHrResults, selectedDate, today]);
 
   useEffect(() => {
     if ((isTrackRecordView || isBestBetsView) && !trackRecordData && !trackRecordLoading) {
@@ -1176,7 +1185,7 @@ export default function Home() {
   useEffect(() => { setDisplayCount(20); }, [activeView]);
 
   function goToDate(date: string) {
-    if (date > today) return;
+    if (!date || (today && date > today)) return;
     setSelectedDate(date);
     setData(null);
     setGameData(null);
@@ -1220,7 +1229,7 @@ export default function Home() {
         <div className="flex items-center gap-2 mb-5">
           <button
             onClick={() => goToDate(offsetDate(selectedDate, -1))}
-            disabled={loading}
+            disabled={loading || !selectedDate}
             className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
             aria-label="Previous day"
           >
@@ -1229,19 +1238,20 @@ export default function Home() {
           <input
             type="date"
             value={selectedDate}
-            max={today}
+            max={today || undefined}
+            disabled={!selectedDate}
             onChange={e => { if (e.target.value) goToDate(e.target.value); }}
             className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-slate-600"
           />
           <button
             onClick={() => goToDate(offsetDate(selectedDate, 1))}
-            disabled={loading || isToday}
+            disabled={loading || !selectedDate || isToday}
             className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-600 disabled:opacity-40 transition-colors"
             aria-label="Next day"
           >
             ›
           </button>
-          <span className="text-slate-400 text-sm">{formatDisplayDate(selectedDate)}</span>
+          <span className="text-slate-400 text-sm">{selectedDate ? formatDisplayDate(selectedDate) : 'Loading date…'}</span>
           {!isToday && (
             <button
               onClick={() => goToDate(today)}
@@ -1422,9 +1432,9 @@ export default function Home() {
                 <option value={0}>All</option>
                 {activeProp === 'hr' ? (
                   <>
-                    <option value={0.02}>2%+</option>
-                    <option value={0.04}>4%+</option>
-                    <option value={0.065}>6.5%+</option>
+                    <option value={0.13}>13%+</option>
+                    <option value={0.16}>16%+</option>
+                    <option value={0.20}>20%+</option>
                   </>
                 ) : (
                   <>

@@ -14,6 +14,8 @@ import {
   FeatureVector, PropProbabilities, PropExplanation,
   HitterPrediction, MLBGame, ConfidenceTier, PropType
 } from '../types';
+import { explainHomeRun, expectedPlateAppearances, homeRunProbability, HomeRunInput } from './hrModel';
+import { classifyWind } from '../lib/wind';
 
 // ─── LOGISTIC SIGMOID ────────────────────────────────────────────────────────
 
@@ -47,7 +49,10 @@ export const PROP_CONFIDENCE_THRESHOLDS: Record<PropType, [number, number, numbe
   hit: [0.72, 0.68, 0.64],
   run: [0.38, 0.33, 0.28],
   rbi: [0.30, 0.25, 0.20],
-  hr:  [0.065, 0.039, 0.021],
+  // HR tiers are on the plate-appearance model's scale (scoring/hrModel.ts).
+  // A typical starter is ~12%. The Sep 2026 top 20 averaged ~20% and homered
+  // at that rate, so ELITE starts at 20% rather than the old 6.5% logit cutoff.
+  hr:  [0.20, 0.16, 0.13],
 };
 
 // Convert raw score to probability. The intercept and scale are chosen so that:
@@ -198,29 +203,19 @@ export function extractFeatures(
     // Below 60°F: penalty. 60–70: neutral. 70–80: slight boost. 80+: good boost.
     const tempBoost = clamp((weather.tempF - 60) / 35, 0, 1) * 0.3;
 
-    // Wind: determine if wind blows "out" (favorable) or "in" (unfavorable)
-    // Wind blowing toward CF (180° ± 45°) = pitchers park
-    // Wind blowing from CF (0° ± 45°) = hitters park
-    // Left-right (90° or 270°) = moderate boost for opposite field hitters
-    const windDeg = weather.windDirectionDeg % 360;
+    // Wind out = blowing toward this park's center field, not "from the north".
+    const wind = classifyWind(park.venueId, weather.windDirectionDeg, weather.windSpeedMph, false);
     const windMph = weather.windSpeedMph;
 
     let windBoost = 0;
-    if (windMph >= 10) {
-      // Wind out to CF (from home plate perspective) = big boost
-      if (windDeg >= 315 || windDeg <= 45) {
-        windBoost = clamp((windMph - 8) / 15, 0, 0.4);
-        windFavorable = true;
-      }
-      // Wind in from CF = penalty
-      else if (windDeg >= 135 && windDeg <= 225) {
-        windBoost = -clamp((windMph - 8) / 15, 0, 0.3);
-      }
-      // Crosswind = small boost (balls carry to gaps)
-      else {
-        windBoost = clamp((windMph - 8) / 30, 0, 0.15);
-        windFavorable = windMph >= 15;
-      }
+    if (windMph >= 10 && wind.kind === 'out') {
+      windBoost = clamp((windMph - 8) / 15, 0, 0.4);
+      windFavorable = true;
+    } else if (windMph >= 10 && wind.kind === 'in') {
+      windBoost = -clamp((windMph - 8) / 15, 0, 0.3);
+    } else if (windMph >= 10 && wind.kind === 'cross') {
+      windBoost = clamp((windMph - 8) / 30, 0, 0.15);
+      windFavorable = windMph >= 15;
     }
 
     // Altitude already captured in park factor, but Coors is so extreme add extra
@@ -301,13 +296,14 @@ export function scoreProbabilities(f: FeatureVector): PropProbabilities {
   const rbi = scoreToProbability(rbiRaw, PROP_CALIBRATION.rbi.intercept, PROP_CALIBRATION.rbi.scale);
 
   // ── HR PROBABILITY ────────────────────────────────────────────────────────
-  // Probability of hitting at least 1 HR in the game.
-  // Original design target was avg MLB player ~6%, elite power ~30% (see intercept
-  // history above) — but graded outcomes showed the model was over-calling HR by
-  // ~3x, so post-2026-07-10 recalibration these run lower: avg player raw ≈ 3.96 →
-  // ~1.6%, elite raw ≈ 7.38 → ~9.6%. Matches what ELITE tier was actually hitting.
+  // Placeholder only. buildPrediction overwrites `hr` with scoring/hrModel.ts
+  // (regressed HR/PA × dampened park × expected PA). Keeping the logit here
+  // means scoreProbabilities() still returns a full object if called alone.
+  // Do not retune these weights to rank the HR tab. On Sep 8–22 that retune
+  // (season rate ~1.35, recent form ~1.75, an explicit L14 HR/PA term, higher
+  // park and weather) scored 3.07/20 against this model's 4.13/20.
   const hrRaw =
-    (f.hitterHRRate          * 3.0) +   // individual HR rate is the biggest predictor
+    (f.hitterHRRate          * 3.0) +   // unused for the HR board; hrModel overwrites
     (f.hitterPowerSkill      * 1.5) +   // raw power
     (f.pitcherVulnerabilityHR * 1.8) +  // pitcher gives up HRs?
     (f.parkHRFactor          * 1.2) +   // park is critical for HRs
@@ -410,10 +406,27 @@ export function buildPrediction(
   opposingPitcher: MLBPitcher | null,
   park: ParkFactors,
   weather: WeatherConditions | null,
+  hrInput?: HomeRunInput,
 ): HitterPrediction {
   const features = extractFeatures(hitter, opposingPitcher, park, weather);
   const probabilities = scoreProbabilities(features);
   const explanations = generateExplanations(features, probabilities, hitter, opposingPitcher, park, weather);
+
+  if (hrInput) {
+    const hr = homeRunProbability(hrInput);
+    probabilities.hr = hr;
+    const hrExpl = explanations.find(e => e.prop === 'hr');
+    if (hrExpl) {
+      hrExpl.probability = hr;
+      hrExpl.confidence = getConfidenceTier(hr, 'hr');
+      hrExpl.keyDrivers = explainHomeRun(hrInput);
+      hrExpl.featureContributions = {
+        hrPerPa: hrInput.pa > 0 ? hrInput.hr / hrInput.pa : 0,
+        expectedPa: expectedPlateAppearances(hrInput),
+        parkFactor: hrInput.parkFactor,
+      };
+    }
+  }
 
   return {
     hitter,

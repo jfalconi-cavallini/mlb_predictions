@@ -45,6 +45,9 @@ export interface MLBGame {
   gameDateTime: string; // ISO 8601 UTC datetime (from MLB Stats API)
   probableHomePitcher: MLBPitcher | null;
   probableAwayPitcher: MLBPitcher | null;
+  /** Posted batting order, player ids. Empty until MLB has a lineup. */
+  homeLineupIds: number[];
+  awayLineupIds: number[];
 }
 
 export interface MLBPitcher {

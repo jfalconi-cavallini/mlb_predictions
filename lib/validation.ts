@@ -116,7 +116,8 @@ interface PendingPlayer {
 export async function validateAndBuildHitterPool(
   todaysTeamIds: Set<number>,
   teamGameMap: Map<number, number>,
-  seenIds: Set<number>
+  seenIds: Set<number>,
+  rosterDate?: string,
 ): Promise<ValidationResult> {
   const accepted: MLBHitter[] = [];
   const rejected: ValidationResult['rejected'] = [];
@@ -128,7 +129,7 @@ export async function validateAndBuildHitterPool(
       if (!VALID_MLB_TEAM_IDS.has(teamId)) {
         return { teamId, hitters: [], valid: false };
       }
-      const result = await fetchActiveRoster(teamId);
+      const result = await fetchActiveRoster(teamId, rosterDate);
       return { teamId, hitters: result.hitters, valid: true };
     })
   );

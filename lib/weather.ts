@@ -1,4 +1,5 @@
 import { WeatherConditions } from '../types';
+import { classifyWind } from './wind';
 
 // Fixed-dome indoor venues — no weather fetch needed
 const INDOOR_VENUE_IDS = new Set([
@@ -40,15 +41,6 @@ const VENUE_COORDS: Record<number, { lat: number; lon: number }> = {
   2680: { lat: 32.7076,  lon: -117.1570 }, // Petco Park
   12:   { lat: 27.7683,  lon: -82.6534  }, // Tropicana Field (indoor)
 };
-
-function windLabel(deg: number, mph: number): string {
-  if (mph < 5) return 'Calm';
-  const d = deg % 360;
-  if (d >= 315 || d <= 45) return 'out to CF';
-  if (d >= 135 && d <= 225) return 'in from CF';
-  if (d > 45 && d < 135) return 'crosswind (E)';
-  return 'crosswind (W)';
-}
 
 interface OpenMeteoResponse {
   hourly: {
@@ -112,7 +104,7 @@ export async function fetchWeather(
       tempF,
       windSpeedMph,
       windDirectionDeg,
-      windDirectionLabel: windLabel(windDirectionDeg, windSpeedMph),
+      windDirectionLabel: classifyWind(venueId, windDirectionDeg, windSpeedMph, false).label,
       humidity,
       precipitationProbability,
       isIndoor: false,

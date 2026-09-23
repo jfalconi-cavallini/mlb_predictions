@@ -39,15 +39,17 @@ interface RosterAPIResponse {
 
 export async function fetchActiveRoster(
   teamId: number,
+  date?: string,
 ): Promise<{ hitters: RosterHitter[]; warnings: string[] }> {
   const warnings: string[] = [];
   const hitters: RosterHitter[] = [];
 
   let data: RosterAPIResponse;
   try {
-    const season = new Date().getFullYear();
+    const season = date?.slice(0, 4) || String(new Date().getFullYear());
+    const dateQ = date ? `&date=${date}` : '';
     data = await mlbFetch<RosterAPIResponse>(
-      `${BASE}/teams/${teamId}/roster/Active?season=${season}`,
+      `${BASE}/teams/${teamId}/roster/Active?season=${season}${dateQ}`,
     );
   } catch (err) {
     warnings.push(`Roster fetch failed for team ${teamId}: ${(err as Error).message}`);
@@ -374,6 +376,10 @@ interface ScheduleAPIRaw {
         };
       };
       venue: { id: number; name: string; city?: string; state?: string };
+      lineups?: {
+        homePlayers?: Array<{ id: number }>;
+        awayPlayers?: Array<{ id: number }>;
+      };
     }>;
   }>;
 }
@@ -388,7 +394,7 @@ export async function fetchTodaysGames(
   let raw: ScheduleAPIRaw;
   try {
     raw = await mlbFetch<ScheduleAPIRaw>(
-      `${BASE}/schedule?sportId=1&date=${date}&hydrate=probablePitcher,team,venue`,
+      `${BASE}/schedule?sportId=1&date=${date}&hydrate=probablePitcher,lineups,team,venue`,
     );
   } catch (err) {
     warnings.push(`Schedule fetch failed: ${(err as Error).message}`);
@@ -465,6 +471,8 @@ export async function fetchTodaysGames(
       gameDateTime: g.gameDate ?? '',
       probableHomePitcher: buildPitcher(g.teams.home.probablePitcher),
       probableAwayPitcher: buildPitcher(g.teams.away.probablePitcher),
+      homeLineupIds: (g.lineups?.homePlayers ?? []).map(p => p.id).filter(id => Number.isInteger(id) && id > 0),
+      awayLineupIds: (g.lineups?.awayPlayers ?? []).map(p => p.id).filter(id => Number.isInteger(id) && id > 0),
     });
   }
 
